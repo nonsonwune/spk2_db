@@ -2,98 +2,95 @@ package prompts
 
 import (
 	"fmt"
+	"path/filepath"
+	"runtime"
 	"strings"
 )
 
 // PromptBuilder handles the construction of prompts for the LLM
 type PromptBuilder struct {
-	baseContext string
-	examples    string
+	baseContext    string
+	examples       string
+	courseMatcher *CourseNameMatcher
 }
 
 // NewPromptBuilder creates a new PromptBuilder with schema context
 func NewPromptBuilder() *PromptBuilder {
+	// Get the current file's directory
+	_, filename, _, _ := runtime.Caller(0)
+	dir := filepath.Dir(filename)
+	
+	matcher := NewCourseNameMatcher()
+	err := matcher.LoadCourseNames(filepath.Join(dir, "course_names.txt"))
+	if err != nil {
+		// Log error but continue - we'll fall back to basic matching
+		fmt.Printf("Warning: Failed to load course names: %v\n", err)
+	}
+
 	return &PromptBuilder{
-		baseContext: SchemaContext,
-		examples:    QueryExamples,
+		baseContext:    SchemaContext,
+		examples:       QueryExamples,
+		courseMatcher: matcher,
 	}
 }
 
 // BuildQueryPrompt creates a prompt for SQL query generation
 func (pb *PromptBuilder) BuildQueryPrompt(query string) string {
+	// Get course patterns
+	var coursePatterns []string
+	if pb.courseMatcher != nil {
+		coursePatterns = pb.courseMatcher.FindMatchingCourses(query)
+	}
+
+	// Build course pattern string
+	var coursePattern string
+	if len(coursePatterns) > 0 {
+		coursePattern = "LIKE ANY(ARRAY[" + strings.Join(coursePatterns, ", ") + "])"
+	} else {
+		coursePattern = "NOT LIKE 'Course %'"
+	}
+
 	return fmt.Sprintf(`You are a SQL query generator for a JAMB database. Follow these rules strictly:
 
-1. Database Statistics:
-   - Total courses: 20,399
-   - Actual named courses: 17,362
-   - Placeholder courses: 3,037 (format: "Course XXXXX")
+1. Database Structure:
+   - candidate: Contains application data (regnumber, gender, year, app_course1, statecode)
+   - course: Course information (course_code, course_name)
+   - institution: School information (inid, inname)
+   - state: State information (st_id, st_name)
 
-2. Table Structure:
-   - candidate: Main table with regnumber, gender, year, app_course1, statecode
-   - course: Contains course_code, course_name
-   - state: Contains st_id, st_name
+2. Course Name Matching:
+   For this query, use the following course pattern:
+   WHERE co.course_name %s
 
-3. Course Categories:
-   A. Science & Engineering:
-      - Engineering courses (Aerospace, Agricultural, Biomedical, etc.)
-      - Pure Sciences (Physics, Chemistry, Biology)
-      - Applied Sciences (Applied Mathematics, Statistics)
-   
-   B. Medical & Health Sciences:
-      - Medicine & Surgery
-      - Veterinary Medicine
-      - Medical Laboratory Science
-      - Medical Biochemistry
-      - Public Health
-   
-   C. Arts & Humanities:
-      - Languages (Arabic, English, French, etc.)
-      - Religious Studies
-      - History & Archaeology
-   
-   D. Social Sciences & Management:
-      - Accounting & Finance
-      - Economics
-      - Business Administration
-   
-   E. Agriculture & Environmental Sciences:
-      - Agricultural Science
-      - Animal Science
-      - Environmental Management
-
-4. Query Rules:
-   - Always exclude placeholder courses:
-     AND LOWER(co.course_name) NOT LIKE 'course%%'
-   - For medicine/health queries use:
-     LOWER(co.course_name) LIKE ANY(ARRAY['%%medicine%%', '%%medical%%', '%%health%%', '%%pharm%%', '%%surg%%'])
-   - Always use UPPER() for gender: UPPER(c.gender) = 'M' or 'F'
-   - Use LOWER() for state names: LOWER(s.st_name) = LOWER('state_name')
-
-5. Best Practices:
-   - Use table aliases: candidate AS c, course AS co, state AS s
-   - Always use proper JOIN conditions
-   - Use COUNT(DISTINCT c.regnumber) for counting candidates
-   - Include year in WHERE clause when relevant
+3. Query Best Practices:
+   - Always use table aliases: 
+     candidate AS c
+     course AS co
+     institution AS i
+     state AS s
+   - Count distinct candidates: COUNT(DISTINCT c.regnumber)
+   - For time trends, group by year: GROUP BY c.year ORDER BY c.year
+   - For gender analysis: UPPER(c.gender) IN ('M', 'F')
 
 Example Queries:
-1. "how many women from anambra applied for medicine in 2023"
+
+1. "which year had the most medicine applicants"
+   SELECT c.year, COUNT(DISTINCT c.regnumber) as applicant_count
+   FROM candidate c
+   JOIN course co ON c.app_course1 = co.course_code
+   WHERE co.course_name LIKE ANY(ARRAY['%%MEDICINE & SURGERY%%', '%%MEDICAL%%'])
+   GROUP BY c.year
+   ORDER BY applicant_count DESC
+   LIMIT 1;
+
+2. "how many people applied for engineering in 2023"
    SELECT COUNT(DISTINCT c.regnumber)
    FROM candidate c
    JOIN course co ON c.app_course1 = co.course_code
-   JOIN state s ON c.statecode = s.st_id
-   WHERE UPPER(c.gender) = 'F'
-   AND LOWER(s.st_name) = LOWER('anambra')
-   AND LOWER(co.course_name) LIKE ANY(ARRAY['%%medicine%%', '%%medical%%', '%%surg%%'])
-   AND LOWER(co.course_name) NOT LIKE 'course%%'
+   WHERE co.course_name LIKE ANY(ARRAY['%%ENGINEERING%%'])
    AND c.year = 2023;
 
-2. "count male candidates in 2023"
-   SELECT COUNT(DISTINCT c.regnumber)
-   FROM candidate c
-   WHERE UPPER(c.gender) = 'M'
-   AND c.year = 2023;
-
-Now generate a SQL query for this question: %s`, query)
+Now generate a SQL query for this question: %s`, coursePattern, query)
 }
 
 // BuildValidationPrompt creates a prompt for validating generated SQL

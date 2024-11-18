@@ -19,6 +19,7 @@ import (
     _ "github.com/lib/pq"
     "github.com/olekukonko/tablewriter"
     "github.com/nonsonwune/spk2_db/nlquery"
+    "github.com/nonsonwune/spk2_db/nlquery/prompts"
     "github.com/nonsonwune/spk2_db/importer"
     "github.com/nonsonwune/spk2_db/migrations"
 )
@@ -1376,22 +1377,6 @@ func handleCourseImport(ctx context.Context, db *sql.DB) error {
 }
 
 func handleNaturalLanguageQuery(ctx context.Context, db *sql.DB) error {
-    // Initialize database configuration
-    dbConfig := map[string]string{
-        "host":     os.Getenv("DB_HOST"),
-        "port":     os.Getenv("DB_PORT"),
-        "user":     os.Getenv("DB_USER"),
-        "password": os.Getenv("DB_PASSWORD"),
-        "dbname":   os.Getenv("DB_NAME"),
-    }
-
-    // Initialize NL Query Engine
-    engine, err := nlquery.NewNLQueryEngine(dbConfig)
-    if err != nil {
-        return fmt.Errorf("error initializing NL Query Engine: %v", err)
-    }
-    defer engine.Close()
-
     fmt.Println("\nNatural Language Query")
     fmt.Println("=====================")
     fmt.Println("Enter your question (or 'exit' to return to menu):")
@@ -1399,13 +1384,87 @@ func handleNaturalLanguageQuery(ctx context.Context, db *sql.DB) error {
     for {
         fmt.Print("\nQuery: ")
         query := readString()
-        
         if strings.ToLower(query) == "exit" {
             return nil
         }
 
-        if err := engine.ProcessQuery(ctx, query); err != nil {
-            fmt.Printf("Error processing query: %v\n", err)
+        // Initialize query builder
+        builder := prompts.NewPromptBuilder()
+
+        sqlQuery, err := nlquery.GenerateSQL(query, builder)
+        if err != nil {
+            color.Red("Error generating query: %v", err)
+            continue
         }
+
+        // Display the generated SQL query
+        color.Blue("\nGenerated SQL Query:")
+        fmt.Println(sqlQuery)
+        fmt.Println()
+
+        // Execute the query
+        rows, err := db.QueryContext(ctx, sqlQuery)
+        if err != nil {
+            color.Red("Error executing query: %v", err)
+            continue
+        }
+        defer rows.Close()
+
+        // Get column names
+        cols, err := rows.Columns()
+        if err != nil {
+            color.Red("Error getting columns: %v", err)
+            continue
+        }
+
+        // Create table writer
+        table := tablewriter.NewWriter(os.Stdout)
+        table.SetHeader(cols)
+        table.SetAutoWrapText(false)
+        table.SetAutoFormatHeaders(true)
+        table.SetHeaderAlignment(tablewriter.ALIGN_LEFT)
+        table.SetAlignment(tablewriter.ALIGN_LEFT)
+        table.SetCenterSeparator("")
+        table.SetColumnSeparator("")
+        table.SetRowSeparator("")
+        table.SetHeaderLine(false)
+        table.SetBorder(false)
+        table.SetTablePadding("\t")
+        table.SetNoWhiteSpace(true)
+
+        // Scan and display results
+        values := make([]interface{}, len(cols))
+        valuePtrs := make([]interface{}, len(cols))
+        for i := range values {
+            valuePtrs[i] = &values[i]
+        }
+
+        for rows.Next() {
+            err := rows.Scan(valuePtrs...)
+            if err != nil {
+                color.Red("Error scanning row: %v", err)
+                continue
+            }
+
+            // Convert values to strings
+            var row []string
+            for _, val := range values {
+                if val == nil {
+                    row = append(row, "NULL")
+                } else {
+                    row = append(row, fmt.Sprintf("%v", val))
+                }
+            }
+            table.Append(row)
+        }
+
+        if err = rows.Err(); err != nil {
+            color.Red("Error reading rows: %v", err)
+            continue
+        }
+
+        // Print results
+        fmt.Println("\nResults:")
+        table.Render()
     }
 }
