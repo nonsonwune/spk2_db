@@ -546,3 +546,54 @@ TECHNICAL DETAILS:
 
 FILES:
 ~ candidate table (updated is_admitted field)
+
+[2024-01-10] Database Schema Alignment and Import Process Enhancement
+
+WHAT:
+- Updated all SQL queries to match standardized singular table names
+- Fixed column name references in queries (e.g., corcode -> code, subj1 -> subject1)
+- Added fuzzy column name matching during data import
+- Implemented interactive column mapping confirmation
+- Added confidence scoring for column matches
+- Added auto-accept for high confidence matches (>80%)
+
+WHY:
+- Align queries with recent database standardization
+- Make import process more resilient to column name variations
+- Reduce import failures due to column mismatches
+- Improve user experience during data import
+- Enable semi-automatic column mapping with user control
+
+TECHNICAL DETAILS:
+- Added levenshteinDistance for fuzzy matching
+- Implemented column name normalization (removing spaces, underscores)
+- Added confidence threshold of 60% for potential matches
+- Added user interaction for multiple matches
+- Added automatic acceptance for >80% confidence matches
+- Updated column mapping storage in DataImporter struct
+
+FILES:
+~ main.go
+~ importer/data_importer.go
+
+[2024-01-10] Fixed Build Error in Data Importer
+
+WHAT:
+- Added back getColumnIndex function with improved matching
+- Added max helper function for integer comparison
+- Enhanced column matching with multiple normalization strategies
+
+WHY:
+- Fix build errors in data_importer.go
+- Improve column name matching reliability
+- Support multiple column name formats
+
+TECHNICAL DETAILS:
+- Added exact match comparison
+- Added space-removed comparison
+- Added underscore-removed comparison
+- Added helper max function for calculations
+- All comparisons done on normalized strings
+
+FILES:
+~ importer/data_importer.go

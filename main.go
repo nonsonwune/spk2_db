@@ -465,13 +465,13 @@ func displayAggregateDistribution(ctx context.Context, db *sql.DB) error {
 
 func displayCourseAnalysis(ctx context.Context, db *sql.DB) error {
     query := `
-        SELECT c."COURSE NAME", COUNT(ca.regnumber) as applicants,
+        SELECT c.course_name, COUNT(ca.regnumber) as applicants,
                ROUND(AVG(ca.aggregate)::numeric, 2) as avg_score,
-               f.fac_name as faculty
+               f.name as faculty
         FROM course c
-        LEFT JOIN candidate ca ON c.corcode = ca.app_course1
-        LEFT JOIN faculty f ON c.facid = f.fac_id
-        GROUP BY c."COURSE NAME", f.fac_name
+        LEFT JOIN candidate ca ON c.course_code = ca.app_course1
+        LEFT JOIN faculty f ON c.faculty_id = f.id
+        GROUP BY c.course_name, f.name
         ORDER BY applicants DESC
         LIMIT 15
     `
@@ -512,11 +512,11 @@ func displayInstitutionStats(ctx context.Context, db *sql.DB) error {
     query := `
         SELECT i.inname, COUNT(c.regnumber) as applicants,
                ROUND(AVG(c.aggregate)::numeric, 2) as avg_score,
-               it.intyp_desc as institution_type
+               it.name as institution_type
         FROM institution i
         LEFT JOIN candidate c ON i.inid = c.inid
-        LEFT JOIN institution_type it ON i.intyp = it.intyp_id
-        GROUP BY i.inname, it.intyp_desc
+        LEFT JOIN institution_type it ON i.institution_type_id = it.id
+        GROUP BY i.inname, it.name
         ORDER BY applicants DESC
         LIMIT 15
     `
@@ -555,12 +555,12 @@ func displayInstitutionStats(ctx context.Context, db *sql.DB) error {
 
 func displayFacultyPerformance(ctx context.Context, db *sql.DB) error {
     query := `
-        SELECT f.fac_name, COUNT(c.regnumber) as applicants,
+        SELECT f.name, COUNT(c.regnumber) as applicants,
                ROUND(AVG(c.aggregate)::numeric, 2) as avg_score
         FROM faculty f
-        JOIN course co ON f.fac_id = co.facid
-        LEFT JOIN candidate c ON co.corcode = c.app_course1
-        GROUP BY f.fac_name
+        JOIN course co ON f.id = co.faculty_id
+        LEFT JOIN candidate c ON co.course_code = c.app_course1
+        GROUP BY f.name
         ORDER BY avg_score DESC
     `
     rows, err := db.QueryContext(ctx, query)
@@ -601,8 +601,8 @@ func displayGeographicAnalysis(ctx context.Context, db *sql.DB) error {
                COUNT(c.regnumber) as candidates,
                ROUND(AVG(c.aggregate)::numeric, 2) as avg_score
         FROM state s
-        JOIN lga l ON s.st_id = l.lg_st_id
-        JOIN candidate c ON l.lg_id = c.lg_id
+        JOIN lga l ON s.st_id = l.state_id
+        JOIN candidate c ON l.lg_id = c.lgaid
         GROUP BY s.st_name, l.lg_name
         HAVING COUNT(c.regnumber) > 1000
         ORDER BY candidates DESC
@@ -688,15 +688,15 @@ func displayYearComparison(ctx context.Context, db *sql.DB) error {
 func displayAdmissionTrends(ctx context.Context, db *sql.DB) error {
     query := `
         WITH course_stats AS (
-            SELECT c."COURSE NAME",
+            SELECT c.course_name,
                    COUNT(*) as applicants,
                    PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY ca.aggregate) as cutoff_score
             FROM course c
-            JOIN candidate ca ON c.corcode = ca.app_course1
-            GROUP BY c."COURSE NAME"
+            JOIN candidate ca ON c.course_code = ca.app_course1
+            GROUP BY c.course_name
             HAVING COUNT(*) > 100
         )
-        SELECT "COURSE NAME",
+        SELECT name,
                applicants,
                ROUND(cutoff_score::numeric, 2) as cutoff_score
         FROM course_stats
@@ -1003,7 +1003,6 @@ func displayInstitutionRanking(ctx context.Context, db *sql.DB) error {
             COALESCE(ROUND(avg_score::numeric, 2), 0) as average_score,
             ROUND((admitted_count::float / total_applicants * 100)::numeric, 2) as admission_rate
         FROM AdmissionStats
-        WHERE avg_score > 0
         ORDER BY avg_score DESC
         LIMIT 20;
     `
@@ -1246,7 +1245,7 @@ func displayRegionalPerformance(ctx context.Context, db *sql.DB) error {
             admitted_count,
             ROUND((female_count::float / total_candidates * 100)::numeric, 2) as female_percentage
         FROM RegionalStats
-        ORDER BY average_score DESC;
+        ORDER BY total_candidates DESC;
     `
     
     rows, err := db.QueryContext(ctx, query)
@@ -1288,18 +1287,18 @@ func displayCourseCompetitiveness(ctx context.Context, db *sql.DB) error {
         WITH CourseStats AS (
             SELECT 
                 c.app_course1 as course_code,
-                co."COURSE NAME" as course_name,
+                co.course_name as course_name,
                 COUNT(c.regnumber) as total_applicants,
                 MIN(NULLIF(c.aggregate, 0)) as min_score,
                 MAX(NULLIF(c.aggregate, 0)) as max_score,
                 AVG(NULLIF(c.aggregate, 0)) as avg_score,
                 COUNT(CASE WHEN c.is_admitted = true THEN 1 END) as admitted_count
             FROM candidate c
-            JOIN course co ON c.app_course1 = co.corcode
+            JOIN course co ON c.app_course1 = co.course_code
             WHERE c.year = (SELECT MAX(year) FROM candidate)
                 AND c.aggregate IS NOT NULL 
                 AND c.aggregate > 0
-            GROUP BY c.app_course1, co."COURSE NAME"
+            GROUP BY c.app_course1, co.course_name
             HAVING COUNT(c.regnumber) > 50
         )
         SELECT 
@@ -1310,7 +1309,6 @@ func displayCourseCompetitiveness(ctx context.Context, db *sql.DB) error {
             COALESCE(ROUND(avg_score::numeric, 2), 0) as average_score,
             ROUND((admitted_count::float / total_applicants * 100)::numeric, 2) as admission_rate
         FROM CourseStats
-        WHERE avg_score > 0
         ORDER BY avg_score DESC
         LIMIT 20;
     `

@@ -350,6 +350,7 @@ type DataImporter struct {
 	institutionMapper *InstitutionMapper
 	failedIndices    map[int]error  // Track failed record indices
 	mu               sync.Mutex     // Protect concurrent access to failedIndices
+	columnMapping    map[string]string
 }
 
 func NewDataImporter(db *sql.DB, config ImportConfig) *DataImporter {
@@ -363,29 +364,111 @@ func NewDataImporter(db *sql.DB, config ImportConfig) *DataImporter {
 	}
 }
 
-// validateHeaders checks if all required columns are present
-func (d *DataImporter) validateHeaders(headers []string) error {
-	headerMap := make(map[string]bool)
-	for _, h := range headers {
-		headerMap[strings.TrimSpace(strings.ToLower(h))] = true
-	}
-
-	for _, required := range d.config.RequiredColumns {
-		if !headerMap[strings.ToLower(required)] {
-			return fmt.Errorf("required column missing: %s", required)
-		}
-	}
-	return nil
+// ColumnMatch represents a potential column match with confidence score
+type ColumnMatch struct {
+	SourceColumn      string
+	DestinationColumn string
+	Confidence       float64
 }
 
-// getColumnIndex returns the index of a column in headers
-func getColumnIndex(headers []string, columnName string) int {
-    for i, header := range headers {
-        if strings.EqualFold(header, columnName) {
-            return i
-        }
-    }
-    return -1
+// findBestColumnMatch uses fuzzy matching to find the best column match
+func (di *DataImporter) findBestColumnMatch(sourceColumn string, requiredColumns []string) []ColumnMatch {
+	matches := make([]ColumnMatch, 0)
+	
+	// Normalize source column
+	normalizedSource := strings.ToLower(strings.TrimSpace(sourceColumn))
+	normalizedSource = strings.ReplaceAll(normalizedSource, "_", "")
+	normalizedSource = strings.ReplaceAll(normalizedSource, " ", "")
+	
+	for _, destColumn := range requiredColumns {
+		// Normalize destination column
+		normalizedDest := strings.ToLower(strings.TrimSpace(destColumn))
+		normalizedDest = strings.ReplaceAll(normalizedDest, "_", "")
+		normalizedDest = strings.ReplaceAll(normalizedDest, " ", "")
+		
+		// Calculate similarity score
+		distance := levenshteinDistance(normalizedSource, normalizedDest)
+		maxLen := float64(max(len(normalizedSource), len(normalizedDest)))
+		confidence := 1.0 - float64(distance)/maxLen
+		
+		if confidence > 0.6 { // Only consider matches with >60% confidence
+			matches = append(matches, ColumnMatch{
+				SourceColumn:      sourceColumn,
+				DestinationColumn: destColumn,
+				Confidence:       confidence,
+			})
+		}
+	}
+	
+	// Sort matches by confidence
+	sort.Slice(matches, func(i, j int) bool {
+		return matches[i].Confidence > matches[j].Confidence
+	})
+	
+	return matches
+}
+
+// validateHeaders checks if all required columns are present with user interaction
+func (di *DataImporter) validateHeaders(headers []string) error {
+	missingColumns := make([]string, 0)
+	di.columnMapping = make(map[string]string)
+	
+	for _, required := range di.config.RequiredColumns {
+		found := false
+		exactMatch := getColumnIndex(headers, required) != -1
+		
+		if exactMatch {
+			di.columnMapping[required] = required
+			found = true
+			continue
+		}
+		
+		// Try fuzzy matching
+		matches := di.findBestColumnMatch(required, headers)
+		if len(matches) > 0 {
+			// Ask user for confirmation if multiple matches found
+			if len(matches) > 1 {
+				fmt.Printf("\nMultiple potential matches found for column '%s':\n", required)
+				for i, match := range matches {
+					fmt.Printf("%d. %s (confidence: %.2f%%)\n", i+1, match.SourceColumn, match.Confidence*100)
+				}
+				fmt.Print("Enter number to select match (0 to skip): ")
+				var choice int
+				fmt.Scanln(&choice)
+				
+				if choice > 0 && choice <= len(matches) {
+					di.columnMapping[required] = matches[choice-1].SourceColumn
+					found = true
+				}
+			} else if matches[0].Confidence > 0.8 { // Auto-accept high confidence matches
+				di.columnMapping[required] = matches[0].SourceColumn
+				found = true
+				fmt.Printf("Automatically mapped '%s' to '%s' (%.2f%% confidence)\n", 
+					required, matches[0].SourceColumn, matches[0].Confidence*100)
+			} else {
+				// Ask for confirmation for lower confidence matches
+				fmt.Printf("\nPotential match found for column '%s':\n", required)
+				fmt.Printf("'%s' (confidence: %.2f%%)\n", matches[0].SourceColumn, matches[0].Confidence*100)
+				fmt.Print("Accept this match? (y/n): ")
+				var response string
+				fmt.Scanln(&response)
+				if strings.ToLower(response) == "y" {
+					di.columnMapping[required] = matches[0].SourceColumn
+					found = true
+				}
+			}
+		}
+		
+		if !found {
+			missingColumns = append(missingColumns, required)
+		}
+	}
+	
+	if len(missingColumns) > 0 {
+		return fmt.Errorf("missing required columns: %v", missingColumns)
+	}
+	
+	return nil
 }
 
 // ImportResult represents the result of importing a chunk of records
@@ -1361,4 +1444,40 @@ func buildUpdateClause(columns []string) string {
         }
     }
     return strings.Join(updates, ", ")
+}
+
+// getColumnIndex returns the index of a column in headers
+func getColumnIndex(headers []string, columnName string) int {
+    for i, header := range headers {
+        // Normalize both strings for comparison
+        normalizedHeader := strings.ToLower(strings.TrimSpace(header))
+        normalizedColumn := strings.ToLower(strings.TrimSpace(columnName))
+        
+        // Try exact match first
+        if normalizedHeader == normalizedColumn {
+            return i
+        }
+        
+        // Try with common variations
+        headerNoSpace := strings.ReplaceAll(normalizedHeader, " ", "")
+        columnNoSpace := strings.ReplaceAll(normalizedColumn, " ", "")
+        if headerNoSpace == columnNoSpace {
+            return i
+        }
+        
+        headerNoUnderscore := strings.ReplaceAll(normalizedHeader, "_", "")
+        columnNoUnderscore := strings.ReplaceAll(normalizedColumn, "_", "")
+        if headerNoUnderscore == columnNoUnderscore {
+            return i
+        }
+    }
+    return -1
+}
+
+// max returns the maximum of two integers
+func max(a, b int) int {
+    if a > b {
+        return a
+    }
+    return b
 }
