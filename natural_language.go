@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/google/generative-ai-go/genai"
 	"github.com/joho/godotenv"
@@ -107,17 +108,26 @@ func (e *NLQueryEngine) ProcessQuery(ctx context.Context, query string) error {
 	chat := e.model.StartChat()
 
 	// Send the query to Gemini
-	prompt := fmt.Sprintf(`As a SQL expert, analyze this query and generate a SQL statement for our JAMB database:
-Query: %s
+	prompt := fmt.Sprintf(`As a SQL expert, generate a PostgreSQL query for our JAMB database based on this question:
+"%s"
 
-Consider:
-1. Tables: candidates, candidate_scores, subjects
-2. Common columns: reg_number, state_code, score, subject_code
-3. Use appropriate joins and conditions
-4. Ensure statistical validity for aggregations
-5. Format results clearly
+Database Schema:
+- candidate table: regnumber, surname, firstname, gender, aggregate, app_course1, inid, lgaid, year, is_admitted
+- candidate_scores table: cand_reg_number, subject_id, score, year
+- subject table: su_id, su_name
+- course table: course_code, course_name, faculty_id
+- faculty table: id, name
+- institution table: inid, inname, inabv
 
-Return the SQL query in a structured format that can be executed.`, query)
+Important Notes:
+1. ALWAYS return a complete SQL query starting with SELECT
+2. Use appropriate JOINs when combining tables
+3. Include WHERE clauses for data quality (e.g., WHERE aggregate > 0)
+4. For aggregations, use GROUP BY and HAVING appropriately
+5. Format numbers using ROUND() for better readability
+6. Limit results to a reasonable number (e.g., LIMIT 20)
+
+Return ONLY the SQL query, no explanations.`, query)
 
 	resp, err := chat.SendMessage(ctx, genai.Text(prompt))
 	if err != nil {
@@ -129,6 +139,8 @@ Return the SQL query in a structured format that can be executed.`, query)
 	if sqlQuery == "" {
 		return fmt.Errorf("no valid SQL query generated")
 	}
+
+	fmt.Printf("\nGenerated SQL Query:\n%s\n\n", sqlQuery)
 
 	// Execute the query
 	results, err := e.executeQuery(sqlQuery)
@@ -146,13 +158,19 @@ func (e *NLQueryEngine) extractSQLFromResponse(resp *genai.GenerateContentRespon
 	for _, candidate := range resp.Candidates {
 		for _, part := range candidate.Content.Parts {
 			if text, ok := part.(genai.Text); ok {
-				// Look for SQL query in the response
-				if idx := strings.Index(string(text), "SELECT"); idx != -1 {
-					query := string(text)[idx:]
-					if endIdx := strings.Index(query, ";"); endIdx != -1 {
-						return query[:endIdx]
+				// Clean up the response
+				response := string(text)
+				response = strings.TrimSpace(response)
+
+				// Look for SQL keywords
+				sqlKeywords := []string{"SELECT", "WITH"}
+				for _, keyword := range sqlKeywords {
+					if idx := strings.Index(strings.ToUpper(response), keyword); idx != -1 {
+						query := response[idx:]
+						// Remove any trailing semicolon and extra whitespace
+						query = strings.TrimRight(query, "; \n\t")
+						return query
 					}
-					return query
 				}
 			}
 		}
@@ -162,15 +180,19 @@ func (e *NLQueryEngine) extractSQLFromResponse(resp *genai.GenerateContentRespon
 
 // Execute SQL query and return results
 func (e *NLQueryEngine) executeQuery(query string) ([]map[string]interface{}, error) {
-	rows, err := e.db.Query(query)
+	// Add timeout to query execution
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	rows, err := e.db.QueryContext(ctx, query)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("SQL error: %v", err)
 	}
 	defer rows.Close()
 
 	columns, err := rows.Columns()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error getting columns: %v", err)
 	}
 
 	var results []map[string]interface{}
@@ -182,14 +204,22 @@ func (e *NLQueryEngine) executeQuery(query string) ([]map[string]interface{}, er
 		}
 
 		if err := rows.Scan(columnPointers...); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("error scanning row: %v", err)
 		}
 
 		for i, colName := range columns {
 			val := columnPointers[i].(*interface{})
-			result[colName] = *val
+			if *val == nil {
+				result[colName] = "NULL"
+			} else {
+				result[colName] = *val
+			}
 		}
 		results = append(results, result)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating rows: %v", err)
 	}
 
 	return results, nil
