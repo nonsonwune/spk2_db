@@ -685,13 +685,6 @@ func getInt64(i sql.NullInt64) int64 {
     return 0
 }
 
-func getNullableInt64(i sql.NullInt64) int64 {
-    if i.Valid {
-        return i.Int64
-    }
-    return 0
-}
-
 func handleCandidateImport(db *sql.DB) {
     fmt.Print("Enter the CSV file path: ")
     filename := readString()
