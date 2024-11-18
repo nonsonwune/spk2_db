@@ -211,7 +211,7 @@ func searchCandidates(ctx context.Context, db *sql.DB) error {
 
     query := `
         SELECT regnumber, surname, firstname, gender, aggregate 
-        FROM candidates 
+        FROM candidate 
         WHERE regnumber LIKE $1 OR LOWER(surname) LIKE LOWER($1)
         LIMIT 10
     `
@@ -252,7 +252,7 @@ func searchCandidates(ctx context.Context, db *sql.DB) error {
 func displayTopPerformers(ctx context.Context, db *sql.DB) error {
     query := `
         SELECT regnumber, surname, firstname, aggregate 
-        FROM candidates 
+        FROM candidate 
         WHERE aggregate IS NOT NULL 
         ORDER BY aggregate DESC 
         LIMIT 10
@@ -296,7 +296,7 @@ func displayTopPerformers(ctx context.Context, db *sql.DB) error {
 func displayGenderStats(ctx context.Context, db *sql.DB) error {
     query := `
         SELECT gender, COUNT(*) as count 
-        FROM candidates 
+        FROM candidate 
         WHERE gender IS NOT NULL 
         GROUP BY gender
     `
@@ -334,7 +334,7 @@ func displayGenderStats(ctx context.Context, db *sql.DB) error {
 func displayStateDistribution(ctx context.Context, db *sql.DB) error {
     query := `
         SELECT s.st_name, COUNT(c.*) as count 
-        FROM candidates c
+        FROM candidate c
         JOIN state s ON c.statecode = s.st_id
         GROUP BY s.st_name 
         ORDER BY count DESC
@@ -380,7 +380,7 @@ func displaySubjectStats(ctx context.Context, db *sql.DB) error {
             WHEN c.subj4 = s.su_id THEN c.score4
         END) as avg_score
         FROM subject s
-        JOIN candidates c ON 
+        JOIN candidate c ON 
             s.su_id IN (c.subj1, c.subj2, c.subj3, c.subj4)
         GROUP BY s.su_name
         ORDER BY avg_score DESC
@@ -427,7 +427,7 @@ func displayAggregateDistribution(ctx context.Context, db *sql.DB) error {
                 ELSE 'Below 150'
             END as range,
             COUNT(*) as count
-        FROM candidates
+        FROM candidate
         WHERE aggregate IS NOT NULL
         GROUP BY range
         ORDER BY range DESC
@@ -469,7 +469,7 @@ func displayCourseAnalysis(ctx context.Context, db *sql.DB) error {
                ROUND(AVG(ca.aggregate)::numeric, 2) as avg_score,
                f.fac_name as faculty
         FROM courses c
-        LEFT JOIN candidates ca ON c.corcode = ca.app_course1
+        LEFT JOIN candidate ca ON c.corcode = ca.app_course1
         LEFT JOIN faculty f ON c.facid = f.fac_id
         GROUP BY c."COURSE NAME", f.fac_name
         ORDER BY applicants DESC
@@ -514,7 +514,7 @@ func displayInstitutionStats(ctx context.Context, db *sql.DB) error {
                ROUND(AVG(c.aggregate)::numeric, 2) as avg_score,
                it.intyp_desc as institution_type
         FROM institutions i
-        LEFT JOIN candidates c ON i.inid = c.inid
+        LEFT JOIN candidate c ON i.inid = c.inid
         LEFT JOIN institution_type it ON i.intyp = it.intyp_id
         GROUP BY i.inname, it.intyp_desc
         ORDER BY applicants DESC
@@ -559,7 +559,7 @@ func displayFacultyPerformance(ctx context.Context, db *sql.DB) error {
                ROUND(AVG(c.aggregate)::numeric, 2) as avg_score
         FROM faculty f
         JOIN courses co ON f.fac_id = co.facid
-        LEFT JOIN candidates c ON co.corcode = c.app_course1
+        LEFT JOIN candidate c ON co.corcode = c.app_course1
         GROUP BY f.fac_name
         ORDER BY avg_score DESC
     `
@@ -602,7 +602,7 @@ func displayGeographicAnalysis(ctx context.Context, db *sql.DB) error {
                ROUND(AVG(c.aggregate)::numeric, 2) as avg_score
         FROM state s
         JOIN lga l ON s.st_id = l.lg_st_id
-        JOIN candidates c ON l.lg_id = c.lg_id
+        JOIN candidate c ON l.lg_id = c.lg_id
         GROUP BY s.st_name, l.lg_name
         HAVING COUNT(c.regnumber) > 1000
         ORDER BY candidates DESC
@@ -648,7 +648,7 @@ func displayYearComparison(ctx context.Context, db *sql.DB) error {
                ROUND(AVG(aggregate)::numeric, 2) as avg_score,
                COUNT(CASE WHEN gender = 'F' THEN 1 END) as female_candidates,
                COUNT(CASE WHEN gender = 'M' THEN 1 END) as male_candidates
-        FROM candidates
+        FROM candidate
         GROUP BY year
         ORDER BY year
     `
@@ -692,7 +692,7 @@ func displayAdmissionTrends(ctx context.Context, db *sql.DB) error {
                    COUNT(*) as applicants,
                    PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY ca.aggregate) as cutoff_score
             FROM courses c
-            JOIN candidates ca ON c.corcode = ca.app_course1
+            JOIN candidate ca ON c.corcode = ca.app_course1
             GROUP BY c."COURSE NAME"
             HAVING COUNT(*) > 100
         )
@@ -914,7 +914,7 @@ func handleAnalyzeFailedImports(ctx context.Context, db *sql.DB) error {
     }
     imp := importer.NewDataImporter(db, config)
 
-    _, err := imp.AnalyzeFailedImports(filename)
+    _, err := imp.AnalyzeFailedImports(ctx, filename)
     if err != nil {
         color.Red("Error analyzing imports: %v", err)
         return err
@@ -931,7 +931,7 @@ func displayPerformanceMetrics(ctx context.Context, db *sql.DB) error {
                 AVG(NULLIF(aggregate, 0)) as avg_score,
                 PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY NULLIF(aggregate, 0)) as median_score,
                 STDDEV(NULLIF(aggregate, 0)) as std_dev
-            FROM candidates 
+            FROM candidate 
             WHERE aggregate IS NOT NULL AND aggregate > 0
             GROUP BY year
         )
@@ -988,8 +988,8 @@ func displayInstitutionRanking(ctx context.Context, db *sql.DB) error {
                 COUNT(CASE WHEN c.is_admitted = true THEN 1 END) as admitted_count,
                 AVG(NULLIF(c.aggregate, 0)) as avg_score
             FROM institutions i
-            LEFT JOIN candidates c ON i.inid = c.inid
-            WHERE c.year = (SELECT MAX(year) FROM candidates)
+            LEFT JOIN candidate c ON i.inid = c.inid
+            WHERE c.year = (SELECT MAX(year) FROM candidate)
                 AND c.aggregate IS NOT NULL 
                 AND c.aggregate > 0
             GROUP BY i.inname, i.inabv
@@ -1056,13 +1056,13 @@ func displaySubjectCorrelation(ctx context.Context, db *sql.DB) error {
                 c.score3 as score3,
                 c.score4 as score4,
                 c.aggregate as total_score
-            FROM candidates c
+            FROM candidate c
             JOIN subject s1 ON c.subj1 = s1.su_id
             JOIN subject s2 ON c.subj2 = s2.su_id
             JOIN subject s3 ON c.subj3 = s3.su_id
             JOIN subject s4 ON c.subj4 = s4.su_id
             WHERE c.is_direct_entry IS NOT TRUE
-            AND c.year = (SELECT MAX(year) FROM candidates)
+            AND c.year = (SELECT MAX(year) FROM candidate)
             AND c.score2 > 0 AND c.score3 > 0 AND c.score4 > 0
         ),
         SubjectStats AS (
@@ -1078,7 +1078,7 @@ func displaySubjectCorrelation(ctx context.Context, db *sql.DB) error {
                 AVG(total_score) as avg_total
             FROM SubjectScores
             GROUP BY subject2, subject3
-            HAVING COUNT(*) >= 100
+            HAVING COUNT(*) >= 1000
             
             UNION ALL
             
@@ -1094,7 +1094,7 @@ func displaySubjectCorrelation(ctx context.Context, db *sql.DB) error {
                 AVG(total_score)
             FROM SubjectScores
             GROUP BY subject2, subject4
-            HAVING COUNT(*) >= 100
+            HAVING COUNT(*) >= 1000
             
             UNION ALL
             
@@ -1110,7 +1110,7 @@ func displaySubjectCorrelation(ctx context.Context, db *sql.DB) error {
                 AVG(total_score)
             FROM SubjectScores
             GROUP BY subject3, subject4
-            HAVING COUNT(*) >= 100
+            HAVING COUNT(*) >= 1000
         )
         SELECT 
             subject1 as "Subject 1",
@@ -1197,9 +1197,9 @@ func displayRegionalPerformance(ctx context.Context, db *sql.DB) error {
                 AVG(NULLIF(c.aggregate, 0)) as avg_score,
                 COUNT(CASE WHEN c.is_admitted = true THEN 1 END) as admitted_count,
                 COUNT(CASE WHEN c.gender = 'F' THEN 1 END) as female_count
-            FROM candidates c
+            FROM candidate c
             JOIN state s ON c.statecode = s.st_id
-            WHERE c.year = (SELECT MAX(year) FROM candidates)
+            WHERE c.year = (SELECT MAX(year) FROM candidate)
                 AND c.aggregate IS NOT NULL 
                 AND c.aggregate > 0
             GROUP BY s.st_name
@@ -1259,9 +1259,9 @@ func displayCourseCompetitiveness(ctx context.Context, db *sql.DB) error {
                 MAX(NULLIF(c.aggregate, 0)) as max_score,
                 AVG(NULLIF(c.aggregate, 0)) as avg_score,
                 COUNT(CASE WHEN c.is_admitted = true THEN 1 END) as admitted_count
-            FROM candidates c
+            FROM candidate c
             JOIN courses co ON c.app_course1 = co.corcode
-            WHERE c.year = (SELECT MAX(year) FROM candidates)
+            WHERE c.year = (SELECT MAX(year) FROM candidate)
                 AND c.aggregate IS NOT NULL 
                 AND c.aggregate > 0
             GROUP BY c.app_course1, co."COURSE NAME"

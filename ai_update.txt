@@ -105,3 +105,115 @@ HOW:
 - Implemented context.WithTimeout for import operations
 - Added specific error handling for context.DeadlineExceeded
 - Improved error messages with color coding
+
+[2024-01-10] Code Review and Validation
+
+WHAT:
+- Conducted comprehensive review of main.go
+- Validated database connection configuration
+- Verified menu system implementation
+- Confirmed proper error handling patterns
+- Checked signal handling for graceful shutdown
+
+WHY:
+- Ensure code quality and best practices
+- Validate system reliability and maintainability
+- Verify proper resource management
+- Confirm user interface functionality
+
+TECHNICAL DETAILS:
+- Confirmed proper connection pooling settings (25 max connections, 5 idle)
+- Verified context usage for cancellation and timeouts
+- Validated menu system with 20 functional options
+- Confirmed proper error wrapping and handling
+- Verified graceful shutdown implementation with signal handling
+
+FILES:
+~ main.go (reviewed)
+
+[2024-01-10] SQL Query Table Name Updates
+
+WHAT:
+- Updated all SQL queries to use singular table name 'candidate' instead of 'candidates'
+- Fixed table references in all analytical queries
+- Updated subqueries and CTEs to use consistent naming
+
+WHY:
+- Align with database schema changes from singular naming convention
+- Fix "relation does not exist" errors
+- Maintain consistency across all database operations
+
+TECHNICAL DETAILS:
+- Updated table references in displaySubjectCorrelation function
+- Fixed table name in year subqueries
+- Updated JOIN clauses to use singular form
+- Maintained all existing query logic and functionality
+- Ensured consistent naming in Common Table Expressions (CTEs)
+
+FILES:
+~ main.go (updated SQL queries)
+
+[2024-01-10] Schema Initialization Table Name Updates
+
+WHAT:
+- Updated schema initialization to check for singular table names
+- Changed table references: 'courses' -> 'course', 'institutions' -> 'institution'
+- Fixed schema validation in InitSchema function
+
+WHY:
+- Align schema validation with singular table naming convention
+- Fix "table does not exist" warning during startup
+- Ensure consistent table name validation
+
+TECHNICAL DETAILS:
+- Updated table name list in InitSchema function
+- Maintained existing validation logic
+- Ensured compatibility with current database schema
+- Validated against actual table names in database
+
+FILES:
+~ migrations/init_schema.go
+
+[2024-01-10] Subject Correlation Analysis Improvements
+
+WHAT:
+- Removed restrictive HAVING clauses from subject correlation query
+- Simplified correlation analysis to show more results
+- Maintained data quality checks for non-zero scores
+
+WHY:
+- Previous query was too restrictive, showing no results
+- Enable analysis of correlations with smaller sample sizes
+- Provide more comprehensive subject relationship insights
+
+TECHNICAL DETAILS:
+- Removed HAVING COUNT(*) >= 100 conditions
+- Maintained score > 0 filters for data quality
+- Kept existing correlation calculation logic
+- Preserved all statistical measures (avg, stddev, etc.)
+
+FILES:
+~ main.go (updated correlation analysis)
+
+[2024-01-10] Code Improvements and Bug Fixes
+
+WHAT:
+- Fixed unused context parameter in handleAnalyzeFailedImports
+- Adjusted subject correlation analysis parameters
+- Added proper context usage in importer analysis
+- Implemented minimum sample size for correlations
+
+WHY:
+- Remove unused parameter warning
+- Improve correlation analysis accuracy
+- Ensure proper context propagation
+- Filter out statistically insignificant correlations
+
+TECHNICAL DETAILS:
+- Added ctx parameter to AnalyzeFailedImports call
+- Set minimum sample size to 1000 for correlations
+- Maintained existing score quality filters
+- Improved statistical significance of results
+
+FILES:
+~ main.go (updated function parameters and correlation analysis)

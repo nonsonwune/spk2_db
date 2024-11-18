@@ -1,0 +1,8 @@
+Remember to maintain ai_update.txt with:
+- Date of changes [YYYY-MM-DD]
+- WHAT: Detailed list of changes made
+- WHY: Rationale behind changes
+- TECHNICAL DETAILS: Implementation specifics
+- Modified files (with ~)
+
+The file is located at: /Users/nonsonwune/Desktop/jamb_projects/spk2_db/ai_update.txt

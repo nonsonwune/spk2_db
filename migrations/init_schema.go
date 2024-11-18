@@ -8,7 +8,7 @@ import (
 // InitSchema verifies that all required tables exist
 func InitSchema(db *sql.DB) error {
 	// We're using existing tables, so just verify they exist
-	tables := []string{"state", "courses", "institutions", "lga", "subject"}
+	tables := []string{"state", "course", "institution", "lga", "subject"}
 	
 	for _, table := range tables {
 		var exists bool
