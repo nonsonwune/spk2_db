@@ -45,22 +45,20 @@ SQL Query:`, pb.baseContext, pb.examples, query)
 
 // BuildValidationPrompt creates a prompt for validating generated SQL
 func (pb *PromptBuilder) BuildValidationPrompt(query, sql string) string {
-	return fmt.Sprintf(`Validate this SQL query for the following natural language question:
+	return fmt.Sprintf(`You are a SQL query validator. Your task is to validate if the generated SQL query correctly answers the user's question.
+Rules:
+1. For medicine-related queries, check if the query handles variations (MEDICINE, MEDICAL, SURGERY)
+2. For counting queries, verify proper use of COUNT and GROUP BY
+3. Check table relationships and joins
+4. Verify WHERE clause conditions match the question
 
-Question: "%s"
+User Question: %s
+Generated SQL: %s
 
-SQL:
-%s
-
-Check for:
-1. Correct table relationships
-2. Proper handling of NULL values
-3. Appropriate use of COUNT(DISTINCT)
-4. Performance considerations
-5. Correct conditions based on the question
-
-If the query is correct, return "VALID"
-If there are issues, return "INVALID: <reason>"`, query, sql)
+Respond with:
+- "VALID" if the query is correct
+- "INVALID: <reason>" if the query is incorrect, explaining why
+`, query, sql)
 }
 
 // ExtractYear attempts to extract year from the query

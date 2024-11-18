@@ -56,12 +56,15 @@ func NewNLQueryEngine(dbConfig map[string]string) (*NLQueryEngine, error) {
 
 // Process natural language query
 func (e *NLQueryEngine) ProcessQuery(ctx context.Context, query string) error {
-	queryCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	queryCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
 
 	// Generate SQL query using Gemini
 	sqlQuery, err := e.generateSQLQuery(queryCtx, query)
 	if err != nil {
+		if strings.Contains(err.Error(), "context deadline exceeded") {
+			return fmt.Errorf("The query timed out. Try a more specific question or add more filters (e.g., year, state, course)")
+		}
 		errMsg, _ := e.getErrorMessage(queryCtx, query, err)
 		return fmt.Errorf(errMsg)
 	}
@@ -120,21 +123,21 @@ func (e *NLQueryEngine) validateQuery(ctx context.Context, query, sql string) (b
 	
 	resp, err := chat.SendMessage(ctx, genai.Text(prompt))
 	if err != nil || len(resp.Candidates) == 0 {
-		return false, "validation failed"
+		return false, "validation failed due to API error"
 	}
 
 	text := resp.Candidates[0].Content.Parts[0]
 	if textStr, ok := text.(genai.Text); ok {
 		result := strings.TrimSpace(string(textStr))
-		if result == "VALID" {
+		if strings.HasPrefix(result, "VALID") {
 			return true, ""
 		}
 		if strings.HasPrefix(result, "INVALID: ") {
 			return false, strings.TrimPrefix(result, "INVALID: ")
 		}
-		return false, result
+		return false, fmt.Sprintf("validation failed: %s", result)
 	}
-	return false, "invalid response format"
+	return false, "invalid response format from validation"
 }
 
 func (e *NLQueryEngine) getErrorMessage(ctx context.Context, query string, err error) (string, error) {
@@ -155,8 +158,23 @@ func (e *NLQueryEngine) getErrorMessage(ctx context.Context, query string, err e
 
 // Execute SQL query and return results
 func (e *NLQueryEngine) executeQuery(query string) ([]map[string]interface{}, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// Increase timeout to 30 seconds for large queries
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+
+	// Add query optimization hints for COUNT queries
+	if strings.Contains(strings.ToUpper(query), "COUNT(") {
+		// Use EXPLAIN to check if we need table scan
+		explain := "EXPLAIN " + query
+		row := e.db.QueryRowContext(ctx, explain)
+		var plan string
+		if err := row.Scan(&plan); err == nil {
+			if strings.Contains(strings.ToLower(plan), "seq scan") {
+				// Add PARALLEL hint for large table scans
+				query = strings.Replace(query, "SELECT", "SELECT /*+ PARALLEL(4) */", 1)
+			}
+		}
+	}
 
 	rows, err := e.db.QueryContext(ctx, query)
 	if err != nil {
