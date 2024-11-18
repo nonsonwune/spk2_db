@@ -2,13 +2,17 @@ package main
 
 import (
     "bufio"
+    "context"
     "database/sql"
     "encoding/csv"
     "fmt"
     "log"
     "os"
+    "os/signal"
     "strconv"
     "strings"
+    "syscall"
+    "time"
 
     "github.com/fatih/color"
     "github.com/joho/godotenv"
@@ -18,89 +22,157 @@ import (
     "github.com/nonsonwune/spk2_db/migrations"
 )
 
-func init() {
-    // Load .env file
-    err := godotenv.Load()
-    if err != nil {
-        log.Fatal("Error loading .env file")
-    }
+// Config holds application configuration
+type Config struct {
+    DBHost     string
+    DBPort     string
+    DBUser     string
+    DBPassword string
+    DBName     string
 }
 
-func main() {
-    // Connect to database using environment variables
+func loadConfig() (*Config, error) {
+    if err := godotenv.Load(); err != nil {
+        return nil, fmt.Errorf("error loading .env file: %w", err)
+    }
+
+    return &Config{
+        DBHost:     os.Getenv("DB_HOST"),
+        DBPort:     os.Getenv("DB_PORT"),
+        DBUser:     os.Getenv("DB_USER"),
+        DBPassword: os.Getenv("DB_PASSWORD"),
+        DBName:     os.Getenv("DB_NAME"),
+    }, nil
+}
+
+func connectDB(cfg *Config) (*sql.DB, error) {
     psqlInfo := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable",
-        os.Getenv("DB_HOST"),
-        os.Getenv("DB_PORT"),
-        os.Getenv("DB_USER"),
-        os.Getenv("DB_PASSWORD"),
-        os.Getenv("DB_NAME"))
+        cfg.DBHost, cfg.DBPort, cfg.DBUser, cfg.DBPassword, cfg.DBName)
 
     db, err := sql.Open("postgres", psqlInfo)
     if err != nil {
-        log.Fatal(err)
+        return nil, fmt.Errorf("error opening database: %w", err)
     }
-    defer db.Close()
+
+    // Set connection pool settings
+    db.SetMaxOpenConns(25)
+    db.SetMaxIdleConns(5)
+    db.SetConnMaxLifetime(5 * time.Minute)
 
     // Test connection
-    err = db.Ping()
-    if err != nil {
-        log.Fatal(err)
+    ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+    defer cancel()
+
+    if err := db.PingContext(ctx); err != nil {
+        return nil, fmt.Errorf("error connecting to database: %w", err)
     }
+
+    return db, nil
+}
+
+func main() {
+    // Load configuration
+    cfg, err := loadConfig()
+    if err != nil {
+        log.Fatalf("Failed to load configuration: %v", err)
+    }
+
+    // Connect to database
+    db, err := connectDB(cfg)
+    if err != nil {
+        log.Fatalf("Failed to connect to database: %v", err)
+    }
+    defer db.Close()
 
     // Initialize database schema
     if err := migrations.InitSchema(db); err != nil {
         log.Printf("Warning: Error initializing schema: %v", err)
     }
 
-    for {
-        displayMenu()
-        choice := readChoice()
+    // Setup signal handling for graceful shutdown
+    ctx, cancel := context.WithCancel(context.Background())
+    defer cancel()
 
-        switch choice {
-        case "1":
-            searchCandidates(db)
-        case "2":
-            displayTopPerformers(db)
-        case "3":
-            displayGenderStats(db)
-        case "4":
-            displayStateDistribution(db)
-        case "5":
-            displaySubjectStats(db)
-        case "6":
-            displayAggregateDistribution(db)
-        case "7":
-            displayCourseAnalysis(db)
-        case "8":
-            displayInstitutionStats(db)
-        case "9":
-            displayFacultyPerformance(db)
-        case "10":
-            displayGeographicAnalysis(db)
-        case "11":
-            displayYearComparison(db)
-        case "12":
-            displayAdmissionTrends(db)
-        case "13":
-            handleCandidateImport(db)
-        case "14":
-            handleAnalyzeFailedImports(db)
-        case "15":
-            displayPerformanceMetrics(db)
-        case "16":
-            displayInstitutionRanking(db)
-        case "17":
-            displaySubjectCorrelation(db)
-        case "18":
-            displayRegionalPerformance(db)
-        case "19":
-            displayCourseCompetitiveness(db)
-        case "20":
-            color.Green("Thank you for using JAMB Candidates Management System!")
+    signalChan := make(chan os.Signal, 1)
+    signal.Notify(signalChan, os.Interrupt, syscall.SIGTERM)
+
+    go func() {
+        sig := <-signalChan
+        log.Printf("Received signal: %v", sig)
+        cancel()
+    }()
+
+    // Start menu loop
+    menuLoop(ctx, db)
+}
+
+func menuLoop(ctx context.Context, db *sql.DB) {
+    for {
+        select {
+        case <-ctx.Done():
+            color.Yellow("\nShutting down gracefully...")
             return
         default:
-            color.Red("Invalid choice. Please try again.")
+            displayMenu()
+            choice := readChoice()
+
+            if err := handleMenuChoice(ctx, db, choice); err != nil {
+                if err == errExit {
+                    color.Green("Thank you for using JAMB Candidates Management System!")
+                    return
+                }
+                color.Red("Error: %v", err)
+            }
         }
+    }
+}
+
+var errExit = fmt.Errorf("exit requested")
+
+func handleMenuChoice(ctx context.Context, db *sql.DB, choice string) error {
+    switch choice {
+    case "1":
+        return searchCandidates(ctx, db)
+    case "2":
+        return displayTopPerformers(ctx, db)
+    case "3":
+        return displayGenderStats(ctx, db)
+    case "4":
+        return displayStateDistribution(ctx, db)
+    case "5":
+        return displaySubjectStats(ctx, db)
+    case "6":
+        return displayAggregateDistribution(ctx, db)
+    case "7":
+        return displayCourseAnalysis(ctx, db)
+    case "8":
+        return displayInstitutionStats(ctx, db)
+    case "9":
+        return displayFacultyPerformance(ctx, db)
+    case "10":
+        return displayGeographicAnalysis(ctx, db)
+    case "11":
+        return displayYearComparison(ctx, db)
+    case "12":
+        return displayAdmissionTrends(ctx, db)
+    case "13":
+        return handleCandidateImport(ctx, db)
+    case "14":
+        return handleAnalyzeFailedImports(ctx, db)
+    case "15":
+        return displayPerformanceMetrics(ctx, db)
+    case "16":
+        return displayInstitutionRanking(ctx, db)
+    case "17":
+        return displaySubjectCorrelation(ctx, db)
+    case "18":
+        return displayRegionalPerformance(ctx, db)
+    case "19":
+        return displayCourseCompetitiveness(ctx, db)
+    case "20":
+        return errExit
+    default:
+        return fmt.Errorf("invalid choice")
     }
 }
 
@@ -129,7 +201,7 @@ func displayMenu() {
     fmt.Print("\nEnter your choice (1-20): ")
 }
 
-func searchCandidates(db *sql.DB) {
+func searchCandidates(ctx context.Context, db *sql.DB) error {
     var searchTerm string
     fmt.Print("Enter registration number or surname to search: ")
     scanner := bufio.NewScanner(os.Stdin)
@@ -144,10 +216,10 @@ func searchCandidates(db *sql.DB) {
         LIMIT 10
     `
 
-    rows, err := db.Query(query, "%"+searchTerm+"%")
+    rows, err := db.QueryContext(ctx, query, "%"+searchTerm+"%")
     if err != nil {
         log.Printf("Error searching candidates: %v", err)
-        return
+        return err
     }
     defer rows.Close()
 
@@ -174,9 +246,10 @@ func searchCandidates(db *sql.DB) {
     }
 
     table.Render()
+    return nil
 }
 
-func displayTopPerformers(db *sql.DB) {
+func displayTopPerformers(ctx context.Context, db *sql.DB) error {
     query := `
         SELECT regnumber, surname, firstname, aggregate 
         FROM candidates 
@@ -185,10 +258,10 @@ func displayTopPerformers(db *sql.DB) {
         LIMIT 10
     `
 
-    rows, err := db.Query(query)
+    rows, err := db.QueryContext(ctx, query)
     if err != nil {
         log.Printf("Error getting top performers: %v", err)
-        return
+        return err
     }
     defer rows.Close()
 
@@ -217,9 +290,10 @@ func displayTopPerformers(db *sql.DB) {
     }
 
     table.Render()
+    return nil
 }
 
-func displayGenderStats(db *sql.DB) {
+func displayGenderStats(ctx context.Context, db *sql.DB) error {
     query := `
         SELECT gender, COUNT(*) as count 
         FROM candidates 
@@ -227,10 +301,10 @@ func displayGenderStats(db *sql.DB) {
         GROUP BY gender
     `
 
-    rows, err := db.Query(query)
+    rows, err := db.QueryContext(ctx, query)
     if err != nil {
         log.Printf("Error getting gender stats: %v", err)
-        return
+        return err
     }
     defer rows.Close()
 
@@ -254,9 +328,10 @@ func displayGenderStats(db *sql.DB) {
     }
 
     table.Render()
+    return nil
 }
 
-func displayStateDistribution(db *sql.DB) {
+func displayStateDistribution(ctx context.Context, db *sql.DB) error {
     query := `
         SELECT s.st_name, COUNT(c.*) as count 
         FROM candidates c
@@ -266,10 +341,10 @@ func displayStateDistribution(db *sql.DB) {
         LIMIT 10
     `
 
-    rows, err := db.Query(query)
+    rows, err := db.QueryContext(ctx, query)
     if err != nil {
         log.Printf("Error getting state distribution: %v", err)
-        return
+        return err
     }
     defer rows.Close()
 
@@ -293,9 +368,10 @@ func displayStateDistribution(db *sql.DB) {
     }
 
     table.Render()
+    return nil
 }
 
-func displaySubjectStats(db *sql.DB) {
+func displaySubjectStats(ctx context.Context, db *sql.DB) error {
     query := `
         SELECT s.su_name, AVG(CASE 
             WHEN c.subj1 = s.su_id THEN c.score1
@@ -310,10 +386,10 @@ func displaySubjectStats(db *sql.DB) {
         ORDER BY avg_score DESC
     `
 
-    rows, err := db.Query(query)
+    rows, err := db.QueryContext(ctx, query)
     if err != nil {
         log.Printf("Error getting subject stats: %v", err)
-        return
+        return err
     }
     defer rows.Close()
 
@@ -337,9 +413,10 @@ func displaySubjectStats(db *sql.DB) {
     }
 
     table.Render()
+    return nil
 }
 
-func displayAggregateDistribution(db *sql.DB) {
+func displayAggregateDistribution(ctx context.Context, db *sql.DB) error {
     query := `
         SELECT 
             CASE 
@@ -356,10 +433,10 @@ func displayAggregateDistribution(db *sql.DB) {
         ORDER BY range DESC
     `
 
-    rows, err := db.Query(query)
+    rows, err := db.QueryContext(ctx, query)
     if err != nil {
         log.Printf("Error getting aggregate distribution: %v", err)
-        return
+        return err
     }
     defer rows.Close()
 
@@ -383,9 +460,10 @@ func displayAggregateDistribution(db *sql.DB) {
     }
 
     table.Render()
+    return nil
 }
 
-func displayCourseAnalysis(db *sql.DB) {
+func displayCourseAnalysis(ctx context.Context, db *sql.DB) error {
     query := `
         SELECT c."COURSE NAME", COUNT(ca.regnumber) as applicants,
                ROUND(AVG(ca.aggregate)::numeric, 2) as avg_score,
@@ -397,10 +475,10 @@ func displayCourseAnalysis(db *sql.DB) {
         ORDER BY applicants DESC
         LIMIT 15
     `
-    rows, err := db.Query(query)
+    rows, err := db.QueryContext(ctx, query)
     if err != nil {
         log.Printf("Error getting course analysis: %v", err)
-        return
+        return err
     }
     defer rows.Close()
 
@@ -427,9 +505,10 @@ func displayCourseAnalysis(db *sql.DB) {
     }
 
     table.Render()
+    return nil
 }
 
-func displayInstitutionStats(db *sql.DB) {
+func displayInstitutionStats(ctx context.Context, db *sql.DB) error {
     query := `
         SELECT i.inname, COUNT(c.regnumber) as applicants,
                ROUND(AVG(c.aggregate)::numeric, 2) as avg_score,
@@ -441,10 +520,10 @@ func displayInstitutionStats(db *sql.DB) {
         ORDER BY applicants DESC
         LIMIT 15
     `
-    rows, err := db.Query(query)
+    rows, err := db.QueryContext(ctx, query)
     if err != nil {
         log.Printf("Error getting institution stats: %v", err)
-        return
+        return err
     }
     defer rows.Close()
 
@@ -471,9 +550,10 @@ func displayInstitutionStats(db *sql.DB) {
     }
 
     table.Render()
+    return nil
 }
 
-func displayFacultyPerformance(db *sql.DB) {
+func displayFacultyPerformance(ctx context.Context, db *sql.DB) error {
     query := `
         SELECT f.fac_name, COUNT(c.regnumber) as applicants,
                ROUND(AVG(c.aggregate)::numeric, 2) as avg_score
@@ -483,10 +563,10 @@ func displayFacultyPerformance(db *sql.DB) {
         GROUP BY f.fac_name
         ORDER BY avg_score DESC
     `
-    rows, err := db.Query(query)
+    rows, err := db.QueryContext(ctx, query)
     if err != nil {
         log.Printf("Error getting faculty performance: %v", err)
-        return
+        return err
     }
     defer rows.Close()
 
@@ -512,9 +592,10 @@ func displayFacultyPerformance(db *sql.DB) {
     }
 
     table.Render()
+    return nil
 }
 
-func displayGeographicAnalysis(db *sql.DB) {
+func displayGeographicAnalysis(ctx context.Context, db *sql.DB) error {
     query := `
         SELECT s.st_name as state, l.lg_name as lga,
                COUNT(c.regnumber) as candidates,
@@ -527,10 +608,10 @@ func displayGeographicAnalysis(db *sql.DB) {
         ORDER BY candidates DESC
         LIMIT 15
     `
-    rows, err := db.Query(query)
+    rows, err := db.QueryContext(ctx, query)
     if err != nil {
         log.Printf("Error getting geographic analysis: %v", err)
-        return
+        return err
     }
     defer rows.Close()
 
@@ -557,9 +638,10 @@ func displayGeographicAnalysis(db *sql.DB) {
     }
 
     table.Render()
+    return nil
 }
 
-func displayYearComparison(db *sql.DB) {
+func displayYearComparison(ctx context.Context, db *sql.DB) error {
     query := `
         SELECT year,
                COUNT(*) as total_candidates,
@@ -570,10 +652,10 @@ func displayYearComparison(db *sql.DB) {
         GROUP BY year
         ORDER BY year
     `
-    rows, err := db.Query(query)
+    rows, err := db.QueryContext(ctx, query)
     if err != nil {
         log.Printf("Error getting year comparison: %v", err)
-        return
+        return err
     }
     defer rows.Close()
 
@@ -600,9 +682,10 @@ func displayYearComparison(db *sql.DB) {
     }
 
     table.Render()
+    return nil
 }
 
-func displayAdmissionTrends(db *sql.DB) {
+func displayAdmissionTrends(ctx context.Context, db *sql.DB) error {
     query := `
         WITH course_stats AS (
             SELECT c."COURSE NAME",
@@ -620,10 +703,10 @@ func displayAdmissionTrends(db *sql.DB) {
         ORDER BY applicants DESC
         LIMIT 15
     `
-    rows, err := db.Query(query)
+    rows, err := db.QueryContext(ctx, query)
     if err != nil {
         log.Printf("Error getting admission trends: %v", err)
-        return
+        return err
     }
     defer rows.Close()
 
@@ -649,6 +732,7 @@ func displayAdmissionTrends(db *sql.DB) {
     }
 
     table.Render()
+    return nil
 }
 
 func readChoice() string {
@@ -685,15 +769,43 @@ func getInt64(i sql.NullInt64) int64 {
     return 0
 }
 
-func handleCandidateImport(db *sql.DB) {
+func handleCandidateImport(ctx context.Context, db *sql.DB) error {
+    // Check if context is already cancelled
+    select {
+    case <-ctx.Done():
+        return ctx.Err()
+    default:
+    }
+
     fmt.Print("Enter the CSV file path: ")
     filename := readString()
+
+    // Check context after user input
+    select {
+    case <-ctx.Done():
+        return ctx.Err()
+    default:
+    }
 
     fmt.Print("Enter the year for the data (e.g., 2023): ")
     year := readInt()
 
+    // Check context after user input
+    select {
+    case <-ctx.Done():
+        return ctx.Err()
+    default:
+    }
+
     fmt.Print("Is this admission data? (y/n): ")
     isAdmission := strings.ToLower(readString()) == "y"
+
+    // Check context after user input
+    select {
+    case <-ctx.Done():
+        return ctx.Err()
+    default:
+    }
 
     workerCount := 4 // default value
     if envWorkerCount := os.Getenv("WORKER_COUNT"); envWorkerCount != "" {
@@ -711,16 +823,24 @@ func handleCandidateImport(db *sql.DB) {
     fmt.Print("Proceed with import? (y/n): ")
 
     if strings.ToLower(readString()) == "y" {
+        // Check context again before starting the import
+        select {
+        case <-ctx.Done():
+            return ctx.Err()
+        default:
+        }
+
         // Open the CSV file
         file, err := os.Open(filename)
         if err != nil {
             color.Red("Error opening file: %v", err)
-            return
+            return fmt.Errorf("error opening file: %w", err)
         }
         defer file.Close()
 
-        // Create CSV reader
-        reader := csv.NewReader(file)
+        // Create a buffered reader for better performance
+        bufferedReader := bufio.NewReader(file)
+        reader := csv.NewReader(bufferedReader)
 
         config := importer.ImportConfig{
             Year:        year,
@@ -730,17 +850,52 @@ func handleCandidateImport(db *sql.DB) {
             WorkerCount: workerCount,
         }
 
-        if err := importer.ImportData(db, config, reader); err != nil {
-            color.Red("Error importing data: %v", err)
-        } else {
-            color.Green("Import completed successfully!")
+        // Create a child context with timeout for the import operation
+        importCtx, cancel := context.WithTimeout(ctx, 30*time.Minute)
+        defer cancel()
+
+        // Create a progress indicator
+        go func() {
+            ticker := time.NewTicker(5 * time.Second)
+            defer ticker.Stop()
+
+            for {
+                select {
+                case <-importCtx.Done():
+                    return
+                case <-ticker.C:
+                    fmt.Print(".")
+                }
+            }
+        }()
+
+        fmt.Print("\nImporting data")
+
+        // Pass the context to ImportData
+        if err := importer.ImportData(importCtx, db, config, reader); err != nil {
+            fmt.Println() // New line after progress dots
+            switch {
+            case err == context.DeadlineExceeded:
+                color.Red("Import timed out after 30 minutes")
+                return fmt.Errorf("import timed out: %w", err)
+            case err == context.Canceled:
+                color.Yellow("Import was cancelled")
+                return fmt.Errorf("import cancelled: %w", err)
+            default:
+                color.Red("Error importing data: %v", err)
+                return fmt.Errorf("import error: %w", err)
+            }
         }
+        
+        fmt.Println() // New line after progress dots
+        color.Green("Import completed successfully!")
     } else {
         fmt.Println("Import cancelled.")
     }
+    return nil
 }
 
-func handleAnalyzeFailedImports(db *sql.DB) {
+func handleAnalyzeFailedImports(ctx context.Context, db *sql.DB) error {
     fmt.Print("Enter the path to the CSV file to analyze: ")
     filename := readString()
 
@@ -762,11 +917,12 @@ func handleAnalyzeFailedImports(db *sql.DB) {
     _, err := imp.AnalyzeFailedImports(filename)
     if err != nil {
         color.Red("Error analyzing imports: %v", err)
-        return
+        return err
     }
+    return nil
 }
 
-func displayPerformanceMetrics(db *sql.DB) {
+func displayPerformanceMetrics(ctx context.Context, db *sql.DB) error {
     query := `
         WITH ScoreStats AS (
             SELECT 
@@ -789,10 +945,10 @@ func displayPerformanceMetrics(db *sql.DB) {
         ORDER BY year DESC;
     `
     
-    rows, err := db.Query(query)
+    rows, err := db.QueryContext(ctx, query)
     if err != nil {
         color.Red("Error fetching performance metrics: %v", err)
-        return
+        return err
     }
     defer rows.Close()
 
@@ -819,9 +975,10 @@ func displayPerformanceMetrics(db *sql.DB) {
 
     color.Cyan("\nPerformance Metrics Analysis")
     table.Render()
+    return nil
 }
 
-func displayInstitutionRanking(db *sql.DB) {
+func displayInstitutionRanking(ctx context.Context, db *sql.DB) error {
     query := `
         WITH AdmissionStats AS (
             SELECT 
@@ -851,10 +1008,10 @@ func displayInstitutionRanking(db *sql.DB) {
         LIMIT 20;
     `
     
-    rows, err := db.Query(query)
+    rows, err := db.QueryContext(ctx, query)
     if err != nil {
         color.Red("Error fetching institution rankings: %v", err)
-        return
+        return err
     }
     defer rows.Close()
 
@@ -883,9 +1040,10 @@ func displayInstitutionRanking(db *sql.DB) {
 
     color.Cyan("\nTop 20 Institutions by Average Score (Latest Year)")
     table.Render()
+    return nil
 }
 
-func displaySubjectCorrelation(db *sql.DB) {
+func displaySubjectCorrelation(ctx context.Context, db *sql.DB) error {
     query := `
         WITH SubjectScores AS (
             SELECT 
@@ -970,10 +1128,10 @@ func displaySubjectCorrelation(db *sql.DB) {
         LIMIT 15;
     `
     
-    rows, err := db.Query(query)
+    rows, err := db.QueryContext(ctx, query)
     if err != nil {
         color.Red("Error fetching subject correlations: %v", err)
-        return
+        return err
     }
     defer rows.Close()
 
@@ -1027,9 +1185,10 @@ func displaySubjectCorrelation(db *sql.DB) {
     } else {
         color.Yellow("\nNo significant correlations found between subjects.")
     }
+    return nil
 }
 
-func displayRegionalPerformance(db *sql.DB) {
+func displayRegionalPerformance(ctx context.Context, db *sql.DB) error {
     query := `
         WITH RegionalStats AS (
             SELECT 
@@ -1055,10 +1214,10 @@ func displayRegionalPerformance(db *sql.DB) {
         ORDER BY average_score DESC;
     `
     
-    rows, err := db.Query(query)
+    rows, err := db.QueryContext(ctx, query)
     if err != nil {
         color.Red("Error fetching regional performance: %v", err)
-        return
+        return err
     }
     defer rows.Close()
 
@@ -1086,9 +1245,10 @@ func displayRegionalPerformance(db *sql.DB) {
 
     color.Cyan("\nRegional Performance Analysis (Latest Year)")
     table.Render()
+    return nil
 }
 
-func displayCourseCompetitiveness(db *sql.DB) {
+func displayCourseCompetitiveness(ctx context.Context, db *sql.DB) error {
     query := `
         WITH CourseStats AS (
             SELECT 
@@ -1120,10 +1280,10 @@ func displayCourseCompetitiveness(db *sql.DB) {
         LIMIT 20;
     `
     
-    rows, err := db.Query(query)
+    rows, err := db.QueryContext(ctx, query)
     if err != nil {
         color.Red("Error fetching course competitiveness: %v", err)
-        return
+        return err
     }
     defer rows.Close()
 
@@ -1152,4 +1312,5 @@ func displayCourseCompetitiveness(db *sql.DB) {
 
     color.Cyan("\nTop 20 Most Competitive Courses (Latest Year)")
     table.Render()
+    return nil
 }

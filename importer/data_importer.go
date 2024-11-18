@@ -1,18 +1,27 @@
 package importer
 
 import (
+	"context"
 	"database/sql"
 	"encoding/csv"
 	"fmt"
+	"io"
 	"log"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
-	"path/filepath"
 	"unicode"
+)
+
+// Constants for configuration
+const (
+	DefaultBatchSize  = 1000
+	DefaultWorkerCount = 4
+	MaxRetries        = 3
 )
 
 // ColumnMapping defines how source columns map to destination columns
@@ -334,11 +343,13 @@ func (im *InstitutionMapper) GetInstitutionID(code string) (string, error) {
 
 // DataImporter handles the import process
 type DataImporter struct {
-	db           *sql.DB
-	config       ImportConfig
-	stateMapper  *StateMapper
-	courseMapper *CourseMapper
+	db               *sql.DB
+	config           ImportConfig
+	stateMapper      *StateMapper
+	courseMapper     *CourseMapper
 	institutionMapper *InstitutionMapper
+	failedIndices    map[int]error  // Track failed record indices
+	mu               sync.Mutex     // Protect concurrent access to failedIndices
 }
 
 func NewDataImporter(db *sql.DB, config ImportConfig) *DataImporter {
@@ -348,6 +359,7 @@ func NewDataImporter(db *sql.DB, config ImportConfig) *DataImporter {
 		stateMapper:  NewStateMapper(db),
 		courseMapper: NewCourseMapper(db),
 		institutionMapper: NewInstitutionMapper(db),
+		failedIndices:    make(map[int]error),
 	}
 }
 
@@ -384,257 +396,179 @@ type ImportResult struct {
     Errors       []error
 }
 
-func (d *DataImporter) importChunk(records [][]string, headers []string, startIndex int) ImportResult {
-    result := ImportResult{
-        ChunkIndex: startIndex,
+func ImportData(ctx context.Context, db *sql.DB, config ImportConfig, reader *csv.Reader) error {
+    importer := NewDataImporter(db, config)
+    
+    // If no column mappings are provided, use the defaults
+    if len(config.ColumnMappings) == 0 {
+        importer.config.ColumnMappings = importer.DefaultColumnMappings()
     }
 
-    for _, record := range records {
-        // Transform the record
-        transformedRecord, err := d.transformRecord(headers, record)
-        if err != nil {
-            result.FailedCount++
-            result.Errors = append(result.Errors, fmt.Errorf("row %d: %v", startIndex+result.SuccessCount+result.FailedCount, err))
-            continue
-        }
-
-        // Insert the record
-        if !d.config.ValidateOnly {
-            err = d.insertRecord(transformedRecord)
-            if err != nil {
-                result.FailedCount++
-                result.Errors = append(result.Errors, fmt.Errorf("row %d: %v", startIndex+result.SuccessCount+result.FailedCount, err))
-                continue
-            }
-        }
-
-        result.SuccessCount++
-    }
-
-    return result
+    return importer.ImportData(ctx, reader)
 }
 
-func (d *DataImporter) prepareInsertStatement(tx *sql.Tx) (*sql.Stmt, error) {
-    columns := []string{
-        "regnumber", "maritalstatus", "challenged", "blind", "deaf",
-        "examtown", "examcentre", "examno", "address", "noofsittings",
-        "datesaved", "timesaved", "mockcand", "mockstate", "mocktown",
-        "datecreated", "email", "gsmno", "surname", "firstname",
-        "middlename", "dateofbirth", "gender", "statecode",
-        "subj1", "score1", "subj2", "score2", "subj3", "score3",
-        "subj4", "score4", "aggregate", "app_course1", "inid",
-        "lg_id", "year", "is_admitted"}
-
-    placeholders := make([]string, len(columns))
-    for i := range columns {
-        placeholders[i] = fmt.Sprintf("$%d", i+1)
+func (d *DataImporter) ImportData(ctx context.Context, reader *csv.Reader) error {
+    // Check if context is cancelled
+    select {
+    case <-ctx.Done():
+        return ctx.Err()
+    default:
     }
 
-    query := fmt.Sprintf(
-        "INSERT INTO candidates (%s) VALUES (%s) ON CONFLICT (regnumber) DO UPDATE SET %s",
-        strings.Join(columns, ", "),
-        strings.Join(placeholders, ", "),
-        buildUpdateClause(columns))
-
-    return tx.Prepare(query)
-}
-
-func (d *DataImporter) transformRecord(headers []string, record []string) ([]interface{}, error) {
-    values := make([]interface{}, 0, len(d.config.ColumnMappings))
-
-    // Add values in the same order as the columns in prepareInsertStatement
-    for _, mapping := range d.config.ColumnMappings {
-        idx := getColumnIndex(headers, mapping.SourceColumn)
-        if idx == -1 || idx >= len(record) {
-            // For year field, use the year from config
-            if mapping.DestinationColumn == "year" {
-                values = append(values, d.config.Year)
-                continue
-            }
-            values = append(values, nil)
-            continue
-        }
-
-        value, err := mapping.TransformFunc(record[idx])
-        if err != nil {
-            return nil, fmt.Errorf("error transforming %s: %v", mapping.SourceColumn, err)
-        }
-        values = append(values, value)
+    // Initialize mappers
+    if err := d.initStateMapper(); err != nil {
+        return fmt.Errorf("error initializing state mapper: %w", err)
+    }
+    if err := d.initCourseMapper(); err != nil {
+        return fmt.Errorf("error initializing course mapper: %w", err)
+    }
+    if err := d.initInstitutionMapper(); err != nil {
+        return fmt.Errorf("error initializing institution mapper: %w", err)
     }
 
-    return values, nil
-}
-
-func (d *DataImporter) insertRecord(record []interface{}) error {
-    // Start a transaction for this record
-    tx, err := d.db.Begin()
+    // Read headers
+    headers, err := reader.Read()
     if err != nil {
-        return fmt.Errorf("error starting transaction: %v", err)
+        return fmt.Errorf("error reading headers: %w", err)
     }
-    defer func() {
-        if err != nil {
-            tx.Rollback()
-        }
-    }()
 
-    stmt, err := d.prepareInsertStatement(tx)
+    // Validate headers
+    if err := d.validateHeaders(headers); err != nil {
+        return fmt.Errorf("header validation failed: %w", err)
+    }
+
+    // Start transaction
+    tx, err := d.db.BeginTx(ctx, nil)
     if err != nil {
-        return fmt.Errorf("error preparing statement: %v", err)
-    }
-    defer stmt.Close()
-
-    _, err = stmt.Exec(record...)
-    if err != nil {
-        return fmt.Errorf("error inserting record: %v", err)
-    }
-
-    // Commit the transaction
-    if err = tx.Commit(); err != nil {
-        return fmt.Errorf("error committing transaction: %v", err)
-    }
-
-    return nil
-}
-
-func (d *DataImporter) ImportData(reader *csv.Reader) error {
-    // Start a transaction
-    tx, err := d.db.Begin()
-    if err != nil {
-        return fmt.Errorf("error starting transaction: %v", err)
+        return fmt.Errorf("error starting transaction: %w", err)
     }
     defer tx.Rollback()
 
-    // Initialize mappers if not already done
-    if d.stateMapper == nil {
-        if err := d.initStateMapper(); err != nil {
-            return fmt.Errorf("failed to initialize state mapper: %v", err)
-        }
-    }
-
-    if d.courseMapper == nil {
-        if err := d.initCourseMapper(); err != nil {
-            return fmt.Errorf("failed to initialize course mapper: %v", err)
-        }
-    }
-
-    if d.institutionMapper == nil {
-        if err := d.initInstitutionMapper(); err != nil {
-            return fmt.Errorf("failed to initialize institution mapper: %v", err)
-        }
-    }
-
-    // Prepare the insert statement
+    // Prepare insert statement
     stmt, err := d.prepareInsertStatement(tx)
     if err != nil {
-        return fmt.Errorf("error preparing statement: %v", err)
+        return fmt.Errorf("error preparing statement: %w", err)
     }
     defer stmt.Close()
 
-    headers, err := reader.Read()
-    if err != nil {
-        return fmt.Errorf("error reading headers: %v", err)
+    // Process records in batches
+    var records [][]string
+    batchSize := d.config.BatchSize
+    if batchSize == 0 {
+        batchSize = DefaultBatchSize
     }
 
-    // Read all records
-    allRecords, err := reader.ReadAll()
-    if err != nil {
-        return fmt.Errorf("error reading records: %v", err)
-    }
-
-    // Track failed records
-    failedIndices := make(map[int]error)
-    var mu sync.Mutex
-
-    // Use configured worker count or default to 4
-    workerCount := d.config.WorkerCount
-    if workerCount <= 0 {
-        workerCount = 4
-    }
-    
-    recordsPerWorker := (len(allRecords) + workerCount - 1) / workerCount
-    
-    // Create channels for results
-    results := make(chan ImportResult, workerCount)
-    var wg sync.WaitGroup
-
-    // Process chunks in parallel
-    for i := 0; i < workerCount; i++ {
-        start := i * recordsPerWorker
-        end := start + recordsPerWorker
-        if end > len(allRecords) {
-            end = len(allRecords)
-        }
-
-        if start >= len(allRecords) {
-            break
-        }
-
-        chunk := allRecords[start:end]
-        wg.Add(1)
-        
-        go func(chunk [][]string, startIndex int) {
-            defer wg.Done()
-            result := d.importChunk(chunk, headers, startIndex)
-            
-            // Track failed records
-            mu.Lock()
-            for i, err := range result.Errors {
-                failedIndices[startIndex+i] = err
-            }
-            mu.Unlock()
-            
-            results <- result
-        }(chunk, start)
-    }
-
-    // Wait for all chunks to be processed
-    go func() {
-        wg.Wait()
-        close(results)
-    }()
-
-    // Collect results
-    totalSuccess := 0
-    totalFailed := 0
+    records = make([][]string, 0, batchSize)
+    recordIndex := 0
+    var totalSuccess, totalFailed int
     var allErrors []error
 
-    // Collect results from all workers
-    for result := range results {
+    for {
+        // Check context before reading next record
+        select {
+        case <-ctx.Done():
+            return ctx.Err()
+        default:
+        }
+
+        record, err := reader.Read()
+        if err == io.EOF {
+            break
+        }
+        if err != nil {
+            log.Printf("Error reading record: %v", err)
+            continue
+        }
+
+        records = append(records, record)
+        recordIndex++
+
+        if len(records) >= batchSize {
+            result := d.processBatch(ctx, records, headers, recordIndex-len(records), stmt)
+            totalSuccess += result.SuccessCount
+            totalFailed += result.FailedCount
+            allErrors = append(allErrors, result.Errors...)
+            records = records[:0]
+        }
+    }
+
+    // Process remaining records
+    if len(records) > 0 {
+        result := d.processBatch(ctx, records, headers, recordIndex-len(records), stmt)
         totalSuccess += result.SuccessCount
         totalFailed += result.FailedCount
         allErrors = append(allErrors, result.Errors...)
     }
 
+    // Commit transaction
+    if err := tx.Commit(); err != nil {
+        return fmt.Errorf("error committing transaction: %w", err)
+    }
+
     // Print summary
-    log.Printf("\nImport Summary:")
-    log.Printf("Total Records Processed: %d", totalSuccess+totalFailed)
-    log.Printf("Successfully Imported: %d (%.2f%%)", 
-        totalSuccess, 
-        float64(totalSuccess)/float64(totalSuccess+totalFailed)*100)
-    log.Printf("Failed Records: %d (%.2f%%)", 
-        totalFailed,
-        float64(totalFailed)/float64(totalSuccess+totalFailed)*100)
+    d.printImportSummary(totalSuccess, totalFailed, allErrors)
 
-    if len(allErrors) > 0 {
-        log.Printf("\nSample of Import Errors (up to 10):")
-        for i := 0; i < min(10, len(allErrors)); i++ {
-            log.Printf("- %v", allErrors[i])
-        }
-    }
-
-    // Save failed records if any
     if totalFailed > 0 {
-        if err := d.SaveFailedRecords(allRecords, headers, failedIndices); err != nil {
-            log.Printf("Warning: Failed to save failed records: %v", err)
+        return fmt.Errorf("import completed with %d failures", totalFailed)
+    }
+
+    return nil
+}
+
+func (d *DataImporter) processBatch(ctx context.Context, records [][]string, headers []string, startIndex int, stmt *sql.Stmt) ImportResult {
+    result := ImportResult{
+        ChunkIndex: startIndex,
+    }
+
+    for i, record := range records {
+        select {
+        case <-ctx.Done():
+            return result
+        default:
+            if err := d.processRecord(ctx, record, headers, stmt); err != nil {
+                result.FailedCount++
+                result.Errors = append(result.Errors, fmt.Errorf("row %d: %v", startIndex+i+1, err))
+                d.failedIndices[startIndex+i] = err
+            } else {
+                result.SuccessCount++
+            }
         }
-        return fmt.Errorf("import completed with %d failed records", totalFailed)
     }
 
-    // Commit the transaction
-    if err = tx.Commit(); err != nil {
-        return fmt.Errorf("error committing transaction: %v", err)
+    return result
+}
+
+func (d *DataImporter) processRecord(ctx context.Context, record []string, headers []string, stmt *sql.Stmt) error {
+    values, err := d.transformRecord(headers, record)
+    if err != nil {
+        return err
     }
 
+    for i := 0; i < MaxRetries; i++ {
+        if err := d.executeInsert(stmt, values); err != nil {
+            if i == MaxRetries-1 {
+                return err
+            }
+            time.Sleep(time.Duration(i+1) * 100 * time.Millisecond)
+            continue
+        }
+        break
+    }
+
+    return nil
+}
+
+func (d *DataImporter) executeInsert(stmt *sql.Stmt, values []interface{}) error {
+    _, err := stmt.Exec(values...)
+    if err != nil {
+        return &ImportError{
+            Code:    "INSERT_FAILED",
+            Message: err.Error(),
+            Context: map[string]string{
+                "values": fmt.Sprintf("%v", values),
+            },
+        }
+    }
     return nil
 }
 
@@ -749,7 +683,7 @@ func (d *DataImporter) AnalyzeFailedImports(filename string) ([]FailedImport, er
     // Use configured worker count or default to 4
     workerCount := d.config.WorkerCount
     if workerCount <= 0 {
-        workerCount = 4
+        workerCount = DefaultWorkerCount
     }
     
     recordsPerWorker := (len(allRecords) + workerCount - 1) / workerCount
@@ -858,27 +792,6 @@ type ImportError struct {
 
 func (e *ImportError) Error() string {
     return fmt.Sprintf("[%s] %s", e.Code, e.Message)
-}
-
-func ImportData(db *sql.DB, config ImportConfig, reader *csv.Reader) error {
-    importer := NewDataImporter(db, config)
-    
-    // If no column mappings are provided, use the defaults
-    if len(config.ColumnMappings) == 0 {
-        importer.config.ColumnMappings = importer.DefaultColumnMappings()
-    }
-    
-    return importer.ImportData(reader)
-}
-
-func buildUpdateClause(columns []string) string {
-    updates := make([]string, 0, len(columns))
-    for _, col := range columns {
-        if col != "regnumber" { // Skip primary key in updates
-            updates = append(updates, fmt.Sprintf("%s = EXCLUDED.%s", col, col))
-        }
-    }
-    return strings.Join(updates, ", ")
 }
 
 func (d *DataImporter) SaveFailedRecords(records [][]string, headers []string, failedIndices map[int]error) error {
@@ -1338,4 +1251,114 @@ func transformGender(s string) (interface{}, error) {
     default:
         return nil, fmt.Errorf("invalid gender value: %s", s)
     }
+}
+
+func (d *DataImporter) prepareInsertStatement(tx *sql.Tx) (*sql.Stmt, error) {
+    columns := []string{
+        "regnumber", "maritalstatus", "challenged", "blind", "deaf",
+        "examtown", "examcentre", "examno", "address", "noofsittings",
+        "datesaved", "timesaved", "mockcand", "mockstate", "mocktown",
+        "datecreated", "email", "gsmno", "surname", "firstname",
+        "middlename", "dateofbirth", "gender", "statecode",
+        "subj1", "score1", "subj2", "score2", "subj3", "score3",
+        "subj4", "score4", "aggregate", "app_course1", "inid",
+        "lg_id", "year", "is_admitted"}
+
+    placeholders := make([]string, len(columns))
+    for i := range columns {
+        placeholders[i] = fmt.Sprintf("$%d", i+1)
+    }
+
+    query := fmt.Sprintf(
+        "INSERT INTO candidates (%s) VALUES (%s) ON CONFLICT (regnumber) DO UPDATE SET %s",
+        strings.Join(columns, ", "),
+        strings.Join(placeholders, ", "),
+        buildUpdateClause(columns))
+
+    return tx.Prepare(query)
+}
+
+func (d *DataImporter) transformRecord(headers []string, record []string) ([]interface{}, error) {
+    values := make([]interface{}, 0, len(d.config.ColumnMappings))
+
+    // Add values in the same order as the columns in prepareInsertStatement
+    for _, mapping := range d.config.ColumnMappings {
+        idx := getColumnIndex(headers, mapping.SourceColumn)
+        if idx == -1 || idx >= len(record) {
+            // For year field, use the year from config
+            if mapping.DestinationColumn == "year" {
+                values = append(values, d.config.Year)
+                continue
+            }
+            values = append(values, nil)
+            continue
+        }
+
+        value, err := mapping.TransformFunc(record[idx])
+        if err != nil {
+            return nil, fmt.Errorf("error transforming %s: %v", mapping.SourceColumn, err)
+        }
+        values = append(values, value)
+    }
+
+    return values, nil
+}
+
+func (d *DataImporter) insertRecord(record []interface{}) error {
+    // Start a transaction for this record
+    tx, err := d.db.Begin()
+    if err != nil {
+        return fmt.Errorf("error starting transaction: %v", err)
+    }
+    defer func() {
+        if err != nil {
+            tx.Rollback()
+        }
+    }()
+
+    stmt, err := d.prepareInsertStatement(tx)
+    if err != nil {
+        return fmt.Errorf("error preparing statement: %v", err)
+    }
+    defer stmt.Close()
+
+    _, err = stmt.Exec(record...)
+    if err != nil {
+        return fmt.Errorf("error inserting record: %v", err)
+    }
+
+    // Commit the transaction
+    if err = tx.Commit(); err != nil {
+        return fmt.Errorf("error committing transaction: %v", err)
+    }
+
+    return nil
+}
+
+func (d *DataImporter) printImportSummary(successCount, failedCount int, errors []error) {
+    log.Printf("\nImport Summary:")
+    log.Printf("Total Records Processed: %d", successCount+failedCount)
+    log.Printf("Successfully Imported: %d (%.2f%%)", 
+        successCount, 
+        float64(successCount)/float64(successCount+failedCount)*100)
+    log.Printf("Failed Records: %d (%.2f%%)", 
+        failedCount,
+        float64(failedCount)/float64(successCount+failedCount)*100)
+
+    if len(errors) > 0 {
+        log.Printf("\nSample of Import Errors (up to 10):")
+        for i := 0; i < min(10, len(errors)); i++ {
+            log.Printf("- %v", errors[i])
+        }
+    }
+}
+
+func buildUpdateClause(columns []string) string {
+    updates := make([]string, 0, len(columns))
+    for _, col := range columns {
+        if col != "regnumber" { // Skip primary key in updates
+            updates = append(updates, fmt.Sprintf("%s = EXCLUDED.%s", col, col))
+        }
+    }
+    return strings.Join(updates, ", ")
 }
