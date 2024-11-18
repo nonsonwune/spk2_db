@@ -195,6 +195,30 @@ TECHNICAL DETAILS:
 FILES:
 ~ main.go (updated correlation analysis)
 
+[2024-01-10] Subject Analysis Structure Fix
+
+WHAT:
+- Fixed subject correlation analysis to properly handle English as Subject 1
+- Added validation to prevent English from appearing in other subject positions
+- Restructured correlation analysis to reflect JAMB exam structure
+- Added explicit score validation for all subjects
+
+WHY:
+- Align with JAMB examination structure where Subject 1 is always English
+- Prevent incorrect subject position assignments
+- Ensure accurate correlation analysis between subjects
+- Maintain data integrity in analysis
+
+TECHNICAL DETAILS:
+- Added s1.su_name = 'Use of English' validation
+- Added checks to prevent English in subjects 2-4
+- Included score1 > 0 validation for English scores
+- Restructured correlation pairs to start with English
+- Modified SubjectStats CTE to handle English correlations first
+
+FILES:
+~ main.go (updated subject correlation analysis)
+
 [2024-01-10] Code Improvements and Bug Fixes
 
 WHAT:
@@ -217,3 +241,70 @@ TECHNICAL DETAILS:
 
 FILES:
 ~ main.go (updated function parameters and correlation analysis)
+
+[2024-01-10] Fixed Context Parameter in AnalyzeFailedImports
+
+WHAT:
+- Removed unnecessary context parameter from AnalyzeFailedImports call
+- Fixed function signature mismatch
+
+WHY:
+- Fix build error due to incorrect function call
+- Maintain consistency with importer package API
+
+TECHNICAL DETAILS:
+- Updated handleAnalyzeFailedImports to call AnalyzeFailedImports without context
+- Fixed "too many arguments" compiler error
+- Maintained existing error handling and logging
+
+FILES:
+~ main.go (updated function call)
+
+[2024-01-10] Comprehensive Table Name Standardization
+
+WHAT:
+- Fixed remaining plural table references across the codebase
+- Updated SQL queries in main.go to use singular table names
+- Fixed course competitiveness query table references
+- Updated importer package table references
+
+WHY:
+- Ensure consistency with singular table naming convention
+- Fix "relation does not exist" errors
+- Maintain database schema standards
+- Complete the table standardization process
+
+TECHNICAL DETAILS:
+- Changed 'courses' to 'course' in all SQL queries
+- Changed 'institutions' to 'institution' in all queries
+- Updated JOIN clauses to use correct table names
+- Fixed data importer queries for course and institution lookups
+- Maintained all existing query logic and functionality
+
+FILES:
+~ main.go (updated all SQL queries)
+~ importer/data_importer.go (fixed table references)
+
+[2024-01-10] Subject Correlation Analysis Refinement
+
+WHAT:
+- Reduced minimum sample size from 1000 to 100 records
+- Removed direct entry filter
+- Removed English subject position restrictions
+- Maintained score quality filters (> 0)
+
+WHY:
+- Previous criteria were too restrictive, showing no results
+- Allow more subject combinations to be analyzed
+- Provide broader insight into subject correlations
+- Keep basic data quality checks
+
+TECHNICAL DETAILS:
+- Changed HAVING COUNT(*) >= 1000 to >= 100
+- Removed is_direct_entry filter
+- Removed English subject position constraints
+- Kept score > 0 validation for data quality
+- Maintained year filter for latest data
+
+FILES:
+~ main.go (updated subject correlation analysis)

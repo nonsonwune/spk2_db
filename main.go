@@ -468,7 +468,7 @@ func displayCourseAnalysis(ctx context.Context, db *sql.DB) error {
         SELECT c."COURSE NAME", COUNT(ca.regnumber) as applicants,
                ROUND(AVG(ca.aggregate)::numeric, 2) as avg_score,
                f.fac_name as faculty
-        FROM courses c
+        FROM course c
         LEFT JOIN candidate ca ON c.corcode = ca.app_course1
         LEFT JOIN faculty f ON c.facid = f.fac_id
         GROUP BY c."COURSE NAME", f.fac_name
@@ -513,7 +513,7 @@ func displayInstitutionStats(ctx context.Context, db *sql.DB) error {
         SELECT i.inname, COUNT(c.regnumber) as applicants,
                ROUND(AVG(c.aggregate)::numeric, 2) as avg_score,
                it.intyp_desc as institution_type
-        FROM institutions i
+        FROM institution i
         LEFT JOIN candidate c ON i.inid = c.inid
         LEFT JOIN institution_type it ON i.intyp = it.intyp_id
         GROUP BY i.inname, it.intyp_desc
@@ -558,7 +558,7 @@ func displayFacultyPerformance(ctx context.Context, db *sql.DB) error {
         SELECT f.fac_name, COUNT(c.regnumber) as applicants,
                ROUND(AVG(c.aggregate)::numeric, 2) as avg_score
         FROM faculty f
-        JOIN courses co ON f.fac_id = co.facid
+        JOIN course co ON f.fac_id = co.facid
         LEFT JOIN candidate c ON co.corcode = c.app_course1
         GROUP BY f.fac_name
         ORDER BY avg_score DESC
@@ -691,7 +691,7 @@ func displayAdmissionTrends(ctx context.Context, db *sql.DB) error {
             SELECT c."COURSE NAME",
                    COUNT(*) as applicants,
                    PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY ca.aggregate) as cutoff_score
-            FROM courses c
+            FROM course c
             JOIN candidate ca ON c.corcode = ca.app_course1
             GROUP BY c."COURSE NAME"
             HAVING COUNT(*) > 100
@@ -914,7 +914,7 @@ func handleAnalyzeFailedImports(ctx context.Context, db *sql.DB) error {
     }
     imp := importer.NewDataImporter(db, config)
 
-    _, err := imp.AnalyzeFailedImports(ctx, filename)
+    _, err := imp.AnalyzeFailedImports(filename)
     if err != nil {
         color.Red("Error analyzing imports: %v", err)
         return err
@@ -987,7 +987,7 @@ func displayInstitutionRanking(ctx context.Context, db *sql.DB) error {
                 COUNT(c.regnumber) as total_applicants,
                 COUNT(CASE WHEN c.is_admitted = true THEN 1 END) as admitted_count,
                 AVG(NULLIF(c.aggregate, 0)) as avg_score
-            FROM institutions i
+            FROM institution i
             LEFT JOIN candidate c ON i.inid = c.inid
             WHERE c.year = (SELECT MAX(year) FROM candidate)
                 AND c.aggregate IS NOT NULL 
@@ -1061,40 +1061,39 @@ func displaySubjectCorrelation(ctx context.Context, db *sql.DB) error {
             JOIN subject s2 ON c.subj2 = s2.su_id
             JOIN subject s3 ON c.subj3 = s3.su_id
             JOIN subject s4 ON c.subj4 = s4.su_id
-            WHERE c.is_direct_entry IS NOT TRUE
-            AND c.year = (SELECT MAX(year) FROM candidate)
-            AND c.score2 > 0 AND c.score3 > 0 AND c.score4 > 0
+            WHERE c.year = (SELECT MAX(year) FROM candidate)
+            AND c.score1 > 0 AND c.score2 > 0 AND c.score3 > 0 AND c.score4 > 0
         ),
         SubjectStats AS (
             SELECT 
-                subject2 as subject1,
-                subject3 as subject2,
-                CORR(score2, score3) as correlation,
+                english as subject1,
+                subject2 as subject2,
+                CORR(english_score, score2) as correlation,
                 COUNT(*) as sample_size,
-                AVG(score2) as avg_score1,
-                AVG(score3) as avg_score2,
-                STDDEV(score2) as stddev1,
-                STDDEV(score3) as stddev2,
+                AVG(english_score) as avg_score1,
+                AVG(score2) as avg_score2,
+                STDDEV(english_score) as stddev1,
+                STDDEV(score2) as stddev2,
                 AVG(total_score) as avg_total
             FROM SubjectScores
-            GROUP BY subject2, subject3
-            HAVING COUNT(*) >= 1000
+            GROUP BY english, subject2
+            HAVING COUNT(*) >= 100
             
             UNION ALL
             
             SELECT 
                 subject2,
-                subject4,
-                CORR(score2, score4),
+                subject3,
+                CORR(score2, score3),
                 COUNT(*),
                 AVG(score2),
-                AVG(score4),
+                AVG(score3),
                 STDDEV(score2),
-                STDDEV(score4),
+                STDDEV(score3),
                 AVG(total_score)
             FROM SubjectScores
-            GROUP BY subject2, subject4
-            HAVING COUNT(*) >= 1000
+            GROUP BY subject2, subject3
+            HAVING COUNT(*) >= 100
             
             UNION ALL
             
@@ -1110,7 +1109,7 @@ func displaySubjectCorrelation(ctx context.Context, db *sql.DB) error {
                 AVG(total_score)
             FROM SubjectScores
             GROUP BY subject3, subject4
-            HAVING COUNT(*) >= 1000
+            HAVING COUNT(*) >= 100
         )
         SELECT 
             subject1 as "Subject 1",
@@ -1260,7 +1259,7 @@ func displayCourseCompetitiveness(ctx context.Context, db *sql.DB) error {
                 AVG(NULLIF(c.aggregate, 0)) as avg_score,
                 COUNT(CASE WHEN c.is_admitted = true THEN 1 END) as admitted_count
             FROM candidate c
-            JOIN courses co ON c.app_course1 = co.corcode
+            JOIN course co ON c.app_course1 = co.corcode
             WHERE c.year = (SELECT MAX(year) FROM candidate)
                 AND c.aggregate IS NOT NULL 
                 AND c.aggregate > 0

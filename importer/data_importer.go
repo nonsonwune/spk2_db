@@ -65,7 +65,7 @@ func (sm *StateMapper) init() error {
 		// Initialize the map
 		sm.nameToID = make(map[string]int)
 
-		query := `SELECT st_id, st_name FROM state`
+		query := `SELECT st_id, st_name FROM states`
 		rows, queryErr := sm.db.Query(query)
 		if queryErr != nil {
 			err = queryErr
@@ -127,7 +127,7 @@ func (sm *StateMapper) GetStateID(stateName string) (int, error) {
 	}
 
 	// If no exact match, try fuzzy matching
-	rows, err := sm.db.Query("SELECT st_id, st_name FROM state")
+	rows, err := sm.db.Query("SELECT st_id, st_name FROM states")
 	if err != nil {
 		return 0, fmt.Errorf("error querying states: %v", err)
 	}
