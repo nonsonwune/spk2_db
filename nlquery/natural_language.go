@@ -1,4 +1,4 @@
-package main
+package nlquery
 
 import (
 	"context"
@@ -111,21 +111,94 @@ func (e *NLQueryEngine) ProcessQuery(ctx context.Context, query string) error {
 	prompt := fmt.Sprintf(`As a SQL expert, generate a PostgreSQL query for our JAMB database based on this question:
 "%s"
 
-Database Schema:
-- candidate table: regnumber, surname, firstname, gender, aggregate, app_course1, inid, lgaid, year, is_admitted
-- candidate_scores table: cand_reg_number, subject_id, score, year
-- subject table: su_id, su_name
-- course table: course_code, course_name, faculty_id
-- faculty table: id, name
-- institution table: inid, inname, inabv
+Complete Database Schema:
+1. candidate table:
+   - regnumber (PK, varchar(20))
+   - surname, firstname, middlename (varchar(100))
+   - gender (varchar(10))
+   - statecode (int, FK -> state.st_id)
+   - aggregate (int)
+   - app_course1 (varchar(100), FK -> course.course_code)
+   - inid (varchar(20), FK -> institution.inid)
+   - lg_id (int, FK -> lga.lg_id)
+   - year (int)
+   - is_admitted (boolean)
+   - is_direct_entry (boolean)
+   - date_of_birth (date)
+
+2. candidate_scores table:
+   - cand_reg_number (PK/FK -> candidate.regnumber)
+   - subject_id (PK/FK -> subject.su_id)
+   - score (int)
+   - year (PK, int)
+
+3. course table:
+   - course_code (PK, varchar(100))
+   - course_name (varchar(200))
+   - facid (int, FK -> faculty.fac_id)
+   - course_abbreviation (varchar(50))
+   - duration (int)
+   - degree (varchar(50))
+
+4. faculty table:
+   - fac_id (PK, int)
+   - fac_name (varchar(100))
+   - fac_code (varchar(10))
+   - fac_abv (varchar(20))
+
+5. institution table:
+   - inid (PK, varchar(20))
+   - inname (varchar(200))
+   - inabv (varchar(50))
+   - inst_state_id (int, FK -> state.st_id)
+   - inst_cat (varchar(20))
+
+6. state table:
+   - st_id (PK, int)
+   - st_name (varchar(100))
+   - st_abreviation (varchar(50))
+
+7. lga table:
+   - lg_id (PK, int)
+   - lg_st_id (int, FK -> state.st_id)
+   - lg_name (varchar(100))
+   - lg_abreviation (varchar(50))
+
+8. subject table:
+   - su_id (PK, int)
+   - su_name (varchar(100))
+   - su_abrv (varchar(10))
+
+Common Query Patterns:
+1. Medical Courses:
+   WHERE LOWER(course_name) SIMILAR TO '%(medic|health|nurs|pharm|dental|clinic|surg|therapy)%'
+
+2. Location-based Queries:
+   Join through state table:
+   JOIN state s ON c.statecode = s.st_id
+   WHERE LOWER(s.st_name) = 'lagos'
+   -- or use state code
+   WHERE s.st_abreviation = 'LAG'
+
+3. Gender Queries:
+   WHERE UPPER(gender) = 'M' for males
+   WHERE UPPER(gender) = 'F' for females
+
+4. Score Analysis:
+   - Use candidate_scores for subject-specific scores
+   - Use aggregate for overall performance
+   - Consider year in analysis
 
 Important Notes:
 1. ALWAYS return a complete SQL query starting with SELECT
 2. Use appropriate JOINs when combining tables
-3. Include WHERE clauses for data quality (e.g., WHERE aggregate > 0)
+3. Include WHERE clauses for data quality
 4. For aggregations, use GROUP BY and HAVING appropriately
 5. Format numbers using ROUND() for better readability
 6. Limit results to a reasonable number (e.g., LIMIT 20)
+7. Use COUNT(*) for counting records
+8. Always alias tables and complex columns
+9. Consider NULL values in calculations
 
 Return ONLY the SQL query, no explanations.`, query)
 
@@ -137,7 +210,7 @@ Return ONLY the SQL query, no explanations.`, query)
 	// Extract SQL query from response
 	sqlQuery := e.extractSQLFromResponse(resp)
 	if sqlQuery == "" {
-		return fmt.Errorf("no valid SQL query generated")
+		return fmt.Errorf("no valid SQL query generated - try rephrasing your question to be more specific about what you want to know about candidates, courses, or scores")
 	}
 
 	fmt.Printf("\nGenerated SQL Query:\n%s\n\n", sqlQuery)
@@ -145,7 +218,7 @@ Return ONLY the SQL query, no explanations.`, query)
 	// Execute the query
 	results, err := e.executeQuery(sqlQuery)
 	if err != nil {
-		return fmt.Errorf("error executing query: %v", err)
+		return fmt.Errorf("error executing query: %v\n\nTry rephrasing your question or being more specific about what information you need", err)
 	}
 
 	// Display results

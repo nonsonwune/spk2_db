@@ -1,4 +1,4 @@
-package main
+package nlquery
 
 import (
 	"context"
@@ -11,15 +11,16 @@ import (
 	_ "github.com/lib/pq"
 )
 
-func main() {
+func RunTests() {
 	// Load environment variables
 	if err := godotenv.Load(); err != nil {
-		log.Fatalf("Error loading .env file: %v", err)
+		log.Fatal("Error loading .env file")
 	}
 
-	// Database configuration
+	// Initialize database configuration
 	dbConfig := map[string]string{
 		"host":     os.Getenv("DB_HOST"),
+		"port":     os.Getenv("DB_PORT"),
 		"user":     os.Getenv("DB_USER"),
 		"password": os.Getenv("DB_PASSWORD"),
 		"dbname":   os.Getenv("DB_NAME"),
@@ -32,9 +33,8 @@ func main() {
 	}
 	defer engine.Close()
 
-	// Create context with timeout
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	fmt.Println("Testing Natural Language Queries...")
+	fmt.Println("===================================\n")
 
 	// Test queries
 	queries := []string{
@@ -44,18 +44,16 @@ func main() {
 		"What is the gender distribution of candidates?",
 	}
 
-	fmt.Println("Testing Natural Language Queries...")
-	fmt.Println("===================================")
+	// Process each query
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 
 	for _, query := range queries {
-		fmt.Printf("\nQuery: %s\n", query)
+		fmt.Printf("Query: %s\n", query)
 		fmt.Println("-----------------------------------")
-		
 		if err := engine.ProcessQuery(ctx, query); err != nil {
 			fmt.Printf("Error processing query: %v\n", err)
 		}
-		
-		fmt.Println("-----------------------------------")
-		time.Sleep(2 * time.Second) // Small delay between queries
+		fmt.Println("-----------------------------------\n")
 	}
 }

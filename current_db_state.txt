@@ -7,36 +7,18 @@
  public       | analysis_cache           | created_at          | timestamp without time zone |                          | YES         |             | 
  public       | candidate                | regnumber           | character varying           |                       20 | NO          | PK          | 
  public       | candidate                | maritalstatus       | character varying           |                       20 | YES         |             | 
- public       | candidate                | challenged          | character varying           |                        5 | YES         |             | 
  public       | candidate                | is_blind            | boolean                     |                          | YES         |             | 
  public       | candidate                | is_deaf             | boolean                     |                          | YES         |             | 
- public       | candidate                | examtown            | character varying           |                      100 | YES         |             | 
- public       | candidate                | examcentre          | character varying           |                      200 | YES         |             | 
- public       | candidate                | examno              | character varying           |                       20 | YES         |             | 
  public       | candidate                | address             | text                        |                          | YES         |             | 
  public       | candidate                | noofsittings        | integer                     |                          | YES         |             | 
- public       | candidate                | datesaved           | character varying           |                       50 | YES         |             | 
- public       | candidate                | timesaved           | character varying           |                       50 | YES         |             | 
  public       | candidate                | is_mock_candidate   | boolean                     |                          | YES         |             | 
- public       | candidate                | mockstate           | integer                     |                          | YES         |             | FK -> state.st_id
- public       | candidate                | mocktown            | character varying           |                      100 | YES         |             | 
- public       | candidate                | datecreated         | character varying           |                       50 | YES         |             | 
  public       | candidate                | email               | character varying           |                      100 | YES         |             | 
  public       | candidate                | gsmno               | character varying           |                       20 | YES         |             | 
  public       | candidate                | surname             | character varying           |                      100 | YES         |             | 
  public       | candidate                | firstname           | character varying           |                      100 | YES         |             | 
  public       | candidate                | middlename          | character varying           |                      100 | YES         |             | 
- public       | candidate                | dateofbirth         | character varying           |                       20 | YES         |             | 
  public       | candidate                | gender              | character varying           |                       10 | YES         |             | 
  public       | candidate                | statecode           | integer                     |                          | YES         |             | FK -> state.st_id
- public       | candidate                | subj1               | integer                     |                          | YES         |             | FK -> subject.su_id
- public       | candidate                | score1              | integer                     |                          | YES         |             | 
- public       | candidate                | subj2               | integer                     |                          | YES         |             | FK -> subject.su_id
- public       | candidate                | score2              | integer                     |                          | YES         |             | 
- public       | candidate                | subj3               | integer                     |                          | YES         |             | FK -> subject.su_id
- public       | candidate                | score3              | integer                     |                          | YES         |             | 
- public       | candidate                | subj4               | integer                     |                          | YES         |             | FK -> subject.su_id
- public       | candidate                | score4              | integer                     |                          | YES         |             | 
  public       | candidate                | aggregate           | integer                     |                          | YES         |             | 
  public       | candidate                | app_course1         | character varying           |                      100 | YES         |             | FK -> course.course_code
  public       | candidate                | inid                | character varying           |                       20 | YES         |             | FK -> institution.inid
@@ -45,6 +27,10 @@
  public       | candidate                | is_admitted         | boolean                     |                          | YES         |             | 
  public       | candidate                | is_direct_entry     | boolean                     |                          | YES         |             | 
  public       | candidate                | malpractice         | text                        |                          | YES         |             | 
+ public       | candidate                | date_of_birth       | date                        |                          | YES         |             | 
+ public       | candidate                | saved_at            | timestamp without time zone |                          | YES         |             | 
+ public       | candidate                | created_at          | timestamp without time zone |                          | YES         |             | 
+ public       | candidate                | updated_at          | timestamp without time zone |                          | YES         |             | 
  public       | candidate_disabilities   | cand_reg_number     | character varying           |                       20 | NO          | PK          | FK -> candidate.regnumber
  public       | candidate_disabilities   | is_blind            | boolean                     |                          | YES         |             | 
  public       | candidate_disabilities   | is_deaf             | boolean                     |                          | YES         |             | 
@@ -124,5 +110,5 @@
  public       | subject_mapping_2023     | csv_code            | character varying           |                       10 | YES         |             | 
  public       | subject_mapping_2023     | su_id               | integer                     |                          | YES         |             | FK -> subject.su_id
  public       | subject_mapping_2023     | position            | integer                     |                          | YES         |             | 
-(124 rows)
+(110 rows)
 

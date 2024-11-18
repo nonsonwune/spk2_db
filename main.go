@@ -18,6 +18,7 @@ import (
     "github.com/joho/godotenv"
     _ "github.com/lib/pq"
     "github.com/olekukonko/tablewriter"
+    "github.com/nonsonwune/spk2_db/nlquery"
     "github.com/nonsonwune/spk2_db/importer"
     "github.com/nonsonwune/spk2_db/migrations"
 )
@@ -170,6 +171,8 @@ func handleMenuChoice(ctx context.Context, db *sql.DB, choice string) error {
     case "19":
         return displayCourseCompetitiveness(ctx, db)
     case "20":
+        return handleNaturalLanguageQuery(ctx, db)
+    case "0":
         return errExit
     default:
         return fmt.Errorf("invalid choice")
@@ -177,9 +180,10 @@ func handleMenuChoice(ctx context.Context, db *sql.DB, choice string) error {
 }
 
 func displayMenu() {
-    color.Cyan("\n=== JAMB Candidates Management System ===")
+    color.Green("\nJAMB Database Analysis System")
+    color.Green("============================")
     fmt.Println("1. Search Candidates")
-    fmt.Println("2. View Top Performers")
+    fmt.Println("2. Top Performers")
     fmt.Println("3. Gender Statistics")
     fmt.Println("4. State Distribution")
     fmt.Println("5. Subject Statistics")
@@ -188,17 +192,18 @@ func displayMenu() {
     fmt.Println("8. Institution Statistics")
     fmt.Println("9. Faculty Performance")
     fmt.Println("10. Geographic Analysis")
-    fmt.Println("11. Year Comparison")
+    fmt.Println("11. Year-over-Year Comparison")
     fmt.Println("12. Admission Trends")
-    fmt.Println("13. Import Candidates Data")
+    fmt.Println("13. Import Candidates")
     fmt.Println("14. Analyze Failed Imports")
     fmt.Println("15. Performance Metrics")
     fmt.Println("16. Institution Ranking")
-    fmt.Println("17. Subject Correlation Analysis")
+    fmt.Println("17. Subject Correlation")
     fmt.Println("18. Regional Performance")
     fmt.Println("19. Course Competitiveness")
-    fmt.Println("20. Exit")
-    fmt.Print("\nEnter your choice (1-20): ")
+    fmt.Println("20. Natural Language Query")
+    fmt.Println("0. Exit")
+    fmt.Print("\nEnter your choice: ")
 }
 
 func searchCandidates(ctx context.Context, db *sql.DB) error {
@@ -1303,4 +1308,39 @@ func displayCourseCompetitiveness(ctx context.Context, db *sql.DB) error {
     color.Cyan("\nTop 20 Most Competitive Courses (Latest Year)")
     table.Render()
     return nil
+}
+
+func handleNaturalLanguageQuery(ctx context.Context, db *sql.DB) error {
+    // Initialize database configuration
+    dbConfig := map[string]string{
+        "host":     os.Getenv("DB_HOST"),
+        "port":     os.Getenv("DB_PORT"),
+        "user":     os.Getenv("DB_USER"),
+        "password": os.Getenv("DB_PASSWORD"),
+        "dbname":   os.Getenv("DB_NAME"),
+    }
+
+    // Initialize NL Query Engine
+    engine, err := nlquery.NewNLQueryEngine(dbConfig)
+    if err != nil {
+        return fmt.Errorf("error initializing NL Query Engine: %v", err)
+    }
+    defer engine.Close()
+
+    fmt.Println("\nNatural Language Query")
+    fmt.Println("=====================")
+    fmt.Println("Enter your question (or 'exit' to return to menu):")
+
+    for {
+        fmt.Print("\nQuery: ")
+        query := readString()
+        
+        if strings.ToLower(query) == "exit" {
+            return nil
+        }
+
+        if err := engine.ProcessQuery(ctx, query); err != nil {
+            fmt.Printf("Error processing query: %v\n", err)
+        }
+    }
 }
