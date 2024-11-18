@@ -909,29 +909,45 @@ func handleCandidateImport(ctx context.Context, db *sql.DB) error {
 }
 
 func handleAnalyzeFailedImports(ctx context.Context, db *sql.DB) error {
-    fmt.Print("Enter the path to the CSV file to analyze: ")
-    filename := readString()
-
-    workerCount := 4 // default value
-    if envWorkerCount := os.Getenv("WORKER_COUNT"); envWorkerCount != "" {
-        if count, err := strconv.Atoi(envWorkerCount); err == nil && count > 0 {
-            workerCount = count
-        }
-    }
-
-    fmt.Printf("\nUsing %d workers for parallel processing\n", workerCount)
-
-    config := importer.ImportConfig{
-        SourceFile:  filename,
-        WorkerCount: workerCount,
-    }
-    imp := importer.NewDataImporter(db, config)
-
-    _, err := imp.AnalyzeFailedImports(filename)
+    // Use context for database queries
+    query := `
+        SELECT error_message, COUNT(*) as count
+        FROM import_errors
+        GROUP BY error_message
+        ORDER BY count DESC
+        LIMIT 10
+    `
+    
+    rows, err := db.QueryContext(ctx, query)
     if err != nil {
-        color.Red("Error analyzing imports: %v", err)
+        color.Red("Error analyzing failed imports: %v", err)
         return err
     }
+    defer rows.Close()
+
+    table := tablewriter.NewWriter(os.Stdout)
+    table.SetHeader([]string{"Error Message", "Count"})
+
+    for rows.Next() {
+        var message string
+        var count int
+        if err := rows.Scan(&message, &count); err != nil {
+            color.Red("Error scanning row: %v", err)
+            continue
+        }
+        table.Append([]string{
+            message,
+            strconv.Itoa(count),
+        })
+    }
+
+    if err = rows.Err(); err != nil {
+        color.Red("Error iterating rows: %v", err)
+        return err
+    }
+
+    color.Cyan("\nFailed Import Analysis")
+    table.Render()
     return nil
 }
 

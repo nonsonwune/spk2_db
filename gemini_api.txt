@@ -1,0 +1,587 @@
+The Gemini API can generate text output when provided text, images, video, and audio as input.
+
+This guide shows you how to generate text using the generateContent and streamGenerateContent methods. To learn about working with Gemini's vision and audio capabilities, refer to the Vision and Audio guides.
+
+Before you begin: Set up your project and API key
+Before calling the Gemini API, you need to set up your project and configure your API key.
+
+ Expand to view how to set up your project and API key
+
+Tip: For complete setup instructions, see the Gemini API quickstart.
+Get and secure your API key
+You need an API key to call the Gemini API. If you don't already have one, create a key in Google AI Studio.
+
+Get an API key
+
+It's strongly recommended that you do not check an API key into your version control system.
+
+You should store your API key in a secrets store such as Google Cloud Secret Manager.
+
+This tutorial assumes that you're accessing your API key as an environment variable.
+
+Import the SDK package and configure your API key
+In your application, do the following:
+
+In your module directory, get the Go SDK package:
+
+
+go get github.com/google/generative-ai-go
+Import the package and configure the service with your API key:
+
+
+import (
+  // import standard libraries
+  // Import the GenerativeAI package for Go
+  "github.com/google/generative-ai-go/genai"
+  "google.golang.org/api/option"
+)
+
+ctx := context.Background()
+// Access your API key as an environment variable
+client, err := genai.NewClient(ctx, option.WithAPIKey(os.Getenv("API_KEY")))
+if err != nil {
+  log.Fatal(err)
+}
+defer client.Close()
+
+// ...
+Generate text from text-only input
+The simplest way to generate text using the Gemini API is to provide the model with a single text-only input, as shown in this example:
+
+
+model := client.GenerativeModel("gemini-1.5-flash")
+resp, err := model.GenerateContent(ctx, genai.Text("Write a story about a magic backpack."))
+if err != nil {
+	log.Fatal(err)
+}
+
+printResponse(resp)
+
+In this case, the prompt ("Write a story about a magic backpack") doesn't include any output examples, system instructions, or formatting information. It's a zero-shot approach. For some use cases, a one-shot or few-shot prompt might produce output that's more aligned with user expectations. In some cases, you might also want to provide system instructions to help the model understand the task or follow specific guidelines.
+
+Generate text from text-and-image input
+The Gemini API supports multimodal inputs that combine text with media files. The following example shows how to generate text from text-and-image input:
+
+
+model := client.GenerativeModel("gemini-1.5-flash")
+
+imgData, err := os.ReadFile(filepath.Join(testDataDir, "organ.jpg"))
+if err != nil {
+	log.Fatal(err)
+}
+
+resp, err := model.GenerateContent(ctx,
+	genai.Text("Tell me about this instrument"),
+	genai.ImageData("jpeg", imgData))
+if err != nil {
+	log.Fatal(err)
+}
+
+printResponse(resp)
+
+As with text-only prompting, multimodal prompting can involve various approaches and refinements. Depending on the output from this example, you might want to add steps to the prompt or be more specific in your instructions. To learn more, see File prompting strategies.
+
+Generate a text stream
+By default, the model returns a response after completing the entire text generation process. You can achieve faster interactions by not waiting for the entire result, and instead use streaming to handle partial results.
+
+The following example shows how to implement streaming using the streamGenerateContent method to generate text from a text-only input prompt.
+
+
+model := client.GenerativeModel("gemini-1.5-flash")
+iter := model.GenerateContentStream(ctx, genai.Text("Write a story about a magic backpack."))
+for {
+	resp, err := iter.Next()
+	if err == iterator.Done {
+		break
+	}
+	if err != nil {
+		log.Fatal(err)
+	}
+	printResponse(resp)
+}
+
+Build an interactive chat
+You can use the Gemini API to build interactive chat experiences for your users. Using the chat feature of the API lets you collect multiple rounds of questions and responses, allowing users to step incrementally toward answers or get help with multipart problems. This feature is ideal for applications that require ongoing communication, such as chatbots, interactive tutors, or customer support assistants.
+
+The following code example shows a basic chat implementation:
+
+
+model := client.GenerativeModel("gemini-1.5-flash")
+cs := model.StartChat()
+
+cs.History = []*genai.Content{
+	{
+		Parts: []genai.Part{
+			genai.Text("Hello, I have 2 dogs in my house."),
+		},
+		Role: "user",
+	},
+	{
+		Parts: []genai.Part{
+			genai.Text("Great to meet you. What would you like to know?"),
+		},
+		Role: "model",
+	},
+}
+
+res, err := cs.SendMessage(ctx, genai.Text("How many paws are in my house?"))
+if err != nil {
+	log.Fatal(err)
+}
+printResponse(res)
+
+Enable chat streaming
+You can also use streaming with chat, as shown in the following example:
+
+
+model := client.GenerativeModel("gemini-1.5-flash")
+cs := model.StartChat()
+
+cs.History = []*genai.Content{
+	{
+		Parts: []genai.Part{
+			genai.Text("Hello, I have 2 dogs in my house."),
+		},
+		Role: "user",
+	},
+	{
+		Parts: []genai.Part{
+			genai.Text("Great to meet you. What would you like to know?"),
+		},
+		Role: "model",
+	},
+}
+
+iter := cs.SendMessageStream(ctx, genai.Text("How many paws are in my house?"))
+for {
+	resp, err := iter.Next()
+	if err == iterator.Done {
+		break
+	}
+	if err != nil {
+		log.Fatal(err)
+	}
+	printResponse(resp)
+}
+
+Configure text generation
+Every prompt you send to the model includes parameters that control how the model generates responses. You can use GenerationConfig to configure these parameters. If you don't configure the parameters, the model uses default options, which can vary by model.
+
+The following example shows how to configure several of the available options.
+
+
+model := client.GenerativeModel("gemini-1.5-pro-latest")
+model.SetTemperature(0.9)
+model.SetTopP(0.5)
+model.SetTopK(20)
+model.SetMaxOutputTokens(100)
+model.SystemInstruction = genai.NewUserContent(genai.Text("You are Yoda from Star Wars."))
+model.ResponseMIMEType = "application/json"
+resp, err := model.GenerateContent(ctx, genai.Text("What is the average size of a swallow?"))
+if err != nil {
+	log.Fatal(err)
+}
+printResponse(resp)
+
+temperature controls the randomness of the output. Use higher values for more creative responses, and lower values for more deterministic responses. Values can range from [0.0, 2.0].
+
+topP changes how the model selects tokens for output. Tokens are selected from the most to least probable until the sum of their probabilities equals the topP value. The default topP value is 0.95.
+
+topK changes how the model selects tokens for output. A topK of 1 means the selected token is the most probable among all the tokens in the model's vocabulary, while a topK of 3 means that the next token is selected from among the 3 most probable using the temperature. Tokens are further filtered based on topP with the final token selected using temperature sampling.
+
+maxOutputTokens sets the maximum number of tokens to include in a candidate.
+
+Calling client.GenerativeModel is inexpensive, so you can create as many model instances as you want and set configuration on each of them.
+
+The Gemini API code execution feature enables the model to generate and run Python code and learn iteratively from the results until it arrives at a final output. You can use this code execution capability to build applications that benefit from code-based reasoning and that produce text output. For example, you could use code execution in an application that solves equations or processes text.
+
+Code execution is available in both AI Studio and the Gemini API. In AI Studio, you can enable code execution under Advanced settings. The Gemini API provides code execution as a tool, similar to function calling. After you add code execution as a tool, the model decides when to use it.
+
+Note: The code execution environment includes the NumPy and SymPy libraries. You can't install your own libraries.
+Get started with code execution
+This section assumes that you've completed the setup and configuration steps shown in the quickstart.
+
+Enable code execution on the model
+You can enable code execution on the model, as shown here:
+
+
+package main
+
+import (
+    "context"
+    "fmt"
+    "log"
+    "os"
+
+    "github.com/google/generative-ai-go/genai"
+    "google.golang.org/api/option"
+)
+
+func main() {
+    ctx := context.Background()
+    client, err := genai.NewClient(ctx, option.WithAPIKey(os.Getenv("API_KEY")))
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer client.Close()
+
+    model := client.GenerativeModel("gemini-1.5-pro")
+    // To enable code execution, set the `CodeExecution` tool.
+    model.Tools = []*genai.Tool{
+        {CodeExecution: &genai.CodeExecution{}},
+    }
+    resp, err := model.GenerateContent(ctx, genai.Text(`
+        What is the sum of the first 50 prime numbers?
+        Generate and run code for the calculation, and make sure you get all 50.
+        `))
+    if err != nil {
+        log.Fatal(err)
+    }
+    // The model will generate code to solve the problem, which is returned in an
+    // `ExecutableCode` part. It will also run that code and use the result,
+    // which is returned in a `CodeExecutionResult` part.
+    printResponse(resp)
+}
+
+func printResponse(resp *genai.GenerateContentResponse) {
+    for _, cand := range resp.Candidates {
+        if cand.Content != nil {
+            for _, part := range cand.Content.Parts {
+                fmt.Println(part)
+            }
+        }
+    }
+    fmt.Println("---")
+}
+The output might look something like this:
+
+
+Thoughts:
+I need to write a program that identifies if a number is prime. Then I need to
+keep track of how many primes I've found, adding them as I go, and stop when I
+get to 50.
+
+&{ExecutableCodePython
+def is_prime(n):
+    """Returns True if n is a prime number, False otherwise."""
+    if n <= 1:
+        return False
+    for i in range(2, int(n**0.5) + 1):
+        if n % i == 0:
+            return False
+    return True
+
+count = 0
+sum_primes = 0
+i = 2
+
+while count < 50:
+    if is_prime(i):
+        sum_primes += i
+        count += 1
+    i += 1
+
+print(f"The sum of the first 50 prime numbers is: {sum_primes}")
+}
+
+&{CodeExecutionResultOutcomeOK The sum of the first 50 prime numbers is: 5117
+}
+
+Findings: The sum of the first 50 prime numbers is 5117.
+
+---
+Calling client.GenerativeModel is inexpensive, so you can create as many model instances as you want and configure the CodeExecution tool as needed.
+
+Use code execution in chat
+You can also use code execution as part of a chat.
+
+
+ctx := context.Background()
+client, err := genai.NewClient(ctx, option.WithAPIKey(os.Getenv("API_KEY")))
+if err != nil {
+  log.Fatal(err)
+}
+defer client.Close()
+
+model := client.GenerativeModel("gemini-1.5-pro")
+// To enable code execution, set the `CodeExecution` tool.
+model.Tools = []*genai.Tool{
+  {CodeExecution: &genai.CodeExecution{}},
+}
+
+cs := model.StartChat()
+res, err := cs.SendMessage(ctx, genai.Text(`
+  What is the sum of the first 50 prime numbers?
+  Generate and run code for the calculation, and make sure you get all 50.
+`))
+if err != nil {
+  log.Fatal(err)
+}
+
+// do something with `res`
+Code execution versus function calling
+Code execution and function calling are similar features:
+
+Code execution lets the model run code in the API backend in a fixed, isolated environment.
+Function calling lets you run the functions that the model requests, in whatever environment you want.
+In general you should prefer to use code execution if it can handle your use case. Code execution is simpler to use (you just enable it) and resolves in a single GenerateContent request (thus incurring a single charge). Function calling takes an additional GenerateContent request to send back the output from each function call (thus incurring multiple charges).
+
+For most cases, you should use function calling if you have your own functions that you want to run locally, and you should use code execution if you'd like the API to write and run Python code for you and return the result.
+
+Billing
+There's no additional charge for enabling code execution from the Gemini API. You'll be billed at the current rate of input and output tokens.
+
+Here are a few other things to know about billing for code execution:
+
+You're only billed once for the input tokens you pass to the model, and you're billed for the final output tokens returned to you by the model.
+Tokens representing generated code are counted as output tokens.
+Code execution results are also counted as output tokens.
+Limitations
+The model can only generate and execute code. It can't return other artifacts like media files.
+The feature doesn't support file I/O or use cases that involve non-text output (for example, data plots or a CSV file upload).
+Code execution can run for a maximum of 30 seconds before timing out.
+In some cases, enabling code execution can lead to regressions in other areas of model output (for example, writing a story).
+There is some variation in the ability of the different models to use code execution successfully. Gemini 1.5 Pro is the best performing model, based on our testing.
+
+Gemini generates unstructured text by default, but some applications require structured text. For these use cases, you can constrain Gemini to respond with JSON, a structured data format suitable for automated processing. You can also constrain the model to respond with one of the options specified in an enum.
+
+Here are a few use cases that might require structured output from the model:
+
+Build a database of companies by pulling company information out of newspaper articles.
+Pull standardized information out of resumes.
+Extract ingredients from recipes and display a link to a grocery website for each ingredient.
+In your prompt, you can ask Gemini to produce JSON-formatted output, but note that the model is not guaranteed to produce JSON and nothing but JSON. For a more deterministic response, you can pass a specific JSON schema in a responseSchema field so that Gemini always responds with an expected structure.
+
+This guide shows you how to generate JSON using the generateContent method through the SDK of your choice or using the REST API directly. The examples show text-only input, although Gemini can also produce JSON responses to multimodal requests that include images, videos, and audio.
+
+Before you begin: Set up your project and API key
+Before calling the Gemini API, you need to set up your project and configure your API key.
+
+ Expand to view how to set up your project and API key
+
+Generate JSON
+When the model is configured to output JSON, it responds to any prompt with JSON-formatted output.
+
+You can control the structure of the JSON response by supplying a schema. There are two ways to supply a schema to the model:
+
+As text in the prompt
+As a structured schema supplied through model configuration
+Both approaches work in both Gemini 1.5 Flash and Gemini 1.5 Pro.
+
+Supply a schema as text in the prompt
+The following example prompts the model to return cookie recipes in a specific JSON format.
+
+Since the model gets the format specification from text in the prompt, you may have some flexibility in how you represent the specification. Any reasonable format for representing a JSON schema may work.
+
+
+	model := client.GenerativeModel("gemini-1.5-pro-latest")
+	// Ask the model to respond with JSON.
+	model.ResponseMIMEType = "application/json"
+	prompt := `List a few popular cookie recipes using this JSON schema:
+                   Recipe = {'recipeName': string}
+	           Return: Array<Recipe>`
+	resp, err := model.GenerateContent(ctx, genai.Text(prompt))
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	printResponse(resp)
+
+The output might look like this:
+
+
+[{"recipeName": "Chocolate Chip Cookies"}, {"recipeName": "Oatmeal Raisin Cookies"}, {"recipeName": "Snickerdoodles"}, {"recipeName": "Sugar Cookies"}, {"recipeName": "Peanut Butter Cookies"}]
+Supply a schema through model configuration
+The following example does the following:
+
+Instantiates a model configured through a schema to respond with JSON.
+Prompts the model to return cookie recipes.
+Important: This more formal method for declaring the JSON schema gives you more precise control than relying just on text in the prompt.
+
+model := client.GenerativeModel("gemini-1.5-pro-latest")
+// Ask the model to respond with JSON.
+model.ResponseMIMEType = "application/json"
+// Specify the schema.
+model.ResponseSchema = &genai.Schema{
+	Type:  genai.TypeArray,
+	Items: &genai.Schema{Type: genai.TypeString},
+}
+resp, err := model.GenerateContent(ctx, genai.Text("List a few popular cookie recipes using this JSON schema."))
+if err != nil {
+	log.Fatal(err)
+}
+for _, part := range resp.Candidates[0].Content.Parts {
+	if txt, ok := part.(genai.Text); ok {
+		var recipes []string
+		if err := json.Unmarshal([]byte(txt), &recipes); err != nil {
+			log.Fatal(err)
+		}
+		fmt.Println(recipes)
+	}
+}
+
+The output might look like this:
+
+
+[{"recipeName": "Chocolate Chip Cookies"}, {"recipeName": "Oatmeal Raisin Cookies"}, {"recipeName": "Snickerdoodles"}, {"recipeName": "Sugar Cookies"}, {"recipeName": "Peanut Butter Cookies"}]
+
+Function calling makes it easier for you to get structured data outputs from generative models. You can then use these outputs to call other APIs and return the relevant response data to the model. In other words, function calling helps you connect generative models to external systems so that the generated content includes the most up-to-date and accurate information.
+
+You can provide Gemini models with descriptions of functions. These are functions that you write in the language of your app (that is, they're not Google Cloud Functions). The model may ask you to call a function and send back the result to help the model handle your query.
+
+If you haven't already, check out the Introduction to function calling to learn more.
+
+Example API for lighting control
+Imagine you have a basic lighting control system with an application programming interface (API) and you want to allow users to control the lights through simple text requests. You can use the Function Calling feature to interpret lighting change requests from users and translate them into API calls to set the lighting values. This hypothetical lighting control system lets you control the brightness of the light and it's color temperature, defined as two separate parameters:
+
+Parameter	Type	Required	Description
+brightness	number	yes	Light level from 0 to 100. Zero is off and 100 is full brightness.
+colorTemperature	string	yes	Color temperature of the light fixture which can be daylight, cool or warm.
+For simplicity, this imaginary lighting system only has one light, so the user does not have to specify a room or location. Here is an example JSON request you could send to the lighting control API to change the light level to 50% using the daylight color temperature:
+
+
+{
+  "brightness": "50",
+  "colorTemperature": "daylight"
+}
+This tutorial shows you how to set up a Function Call for the Gemini API to interpret users lighting requests and map them to API settings to control a light's brightness and color temperature values.
+
+Before you begin: Set up your project and API key
+Before calling the Gemini API, you need to set up your project and configure your API key.
+
+ Expand to view how to set up your project and API key
+
+Tip: For complete setup instructions, see the Gemini API quickstart.
+Get and secure your API key
+You need an API key to call the Gemini API. If you don't already have one, create a key in Google AI Studio.
+
+Get an API key
+
+It's strongly recommended that you do not check an API key into your version control system.
+
+You should store your API key in a secrets store such as Google Cloud Secret Manager.
+
+This tutorial assumes that you're accessing your API key as an environment variable.
+
+Import the SDK package and configure your API key
+In your application, do the following:
+
+In your module directory, get the Go SDK package:
+
+
+go get github.com/google/generative-ai-go
+Import the package and configure the service with your API key:
+
+
+import (
+  // import standard libraries
+  // Import the GenerativeAI package for Go
+  "github.com/google/generative-ai-go/genai"
+  "google.golang.org/api/option"
+)
+
+ctx := context.Background()
+// Access your API key as an environment variable
+client, err := genai.NewClient(ctx, option.WithAPIKey(os.Getenv("API_KEY")))
+if err != nil {
+  log.Fatal(err)
+}
+defer client.Close()
+
+// ...
+Define an API function
+Create a function that makes an API request. This function should be defined within the code of your application, but could call services or APIs outside of your application. The Gemini API does not call this function directly, so you can control how and when this function is executed through your application code. For demonstration purposes, this tutorial defines a mock API function that just returns the requested lighting values:
+
+
+func setLightValues(brightness int, colorTemp string) map[string]any {
+    // This mock API returns the requested lighting values
+    return map[string]any{
+        "brightness":       brightness,
+        "colorTemperature": colorTemp}
+}
+Caution: For any production application, you should validate the data being passed to the API function from the model before executing the function.
+Create a function declaration
+Create the function declaration that you'll pass to the generative model. When you declare a function for use by the model, you should include as much detail as possible in the function and parameter descriptions. The generative model uses this information to determine which function to select and how to provide values for the parameters in the function call. The following code shows how to declare the lighting control function:
+
+
+lightControlTool := &genai.Tool{
+    FunctionDeclarations: []*genai.FunctionDeclaration{{
+        Name:        "controlLight",
+        Description: "Set the brightness and color temperature of a room light.",
+        Parameters: &genai.Schema{
+            Type: genai.TypeObject,
+            Properties: map[string]*genai.Schema{
+                "brightness": {
+                    Type:        genai.TypeString,
+                    Description: "Light level from 0 to 100. Zero is off and"+
+                        " 100 is full brightness.",
+                },
+                "colorTemperature": {
+                    Type:        genai.TypeString,
+                    Description: "Color temperature of the light fixture which" +
+                        " can be `daylight`, `cool` or `warm`.",
+                },
+            },
+            Required: []string{"brightness", "colorTemperature"},
+        },
+    }},
+}
+Declare functions during model initialization
+When you want to use function calling with a model, you must provide your function declarations when you initialize the model object. You declare functions by setting the model's Tools parameter:
+
+
+// ...
+
+lightControlTool := &genai.Tool{
+    // ...
+}
+
+// Use a model that supports function calling, like a Gemini 1.5 model
+model := client.GenerativeModel("gemini-1.5-flash")
+
+// Specify the function declaration.
+model.Tools = []*genai.Tool{lightControlTool}
+Generate a function call
+Once you have initialized model with your function declarations, you can prompt the model with the defined function. You should use function calling using chat prompting (SendMessage()), since function calling generally benefits from having the context of previous prompts and responses.
+
+
+// Start new chat session.
+session := model.StartChat()
+
+prompt := "Dim the lights so the room feels cozy and warm."
+
+// Send the message to the generative model.
+resp, err := session.SendMessage(ctx, genai.Text(prompt))
+if err != nil {
+    log.Fatalf("Error sending message: %v\n", err)
+}
+
+// Check that you got the expected function call back.
+part := resp.Candidates[0].Content.Parts[0]
+funcall, ok := part.(genai.FunctionCall)
+if !ok {
+    log.Fatalf("Expected type FunctionCall, got %T", part)
+}
+if g, e := funcall.Name, lightControlTool.FunctionDeclarations[0].Name; g != e {
+    log.Fatalf("Expected FunctionCall.Name %q, got %q", e, g)
+}
+fmt.Printf("Received function call response:\n%q\n\n", part)
+
+apiResult := map[string]any{
+    "brightness":  "30",
+    "colorTemperature":  "warm" }
+
+// Send the hypothetical API result back to the generative model.
+fmt.Printf("Sending API result:\n%q\n\n", apiResult)
+resp, err = session.SendMessage(ctx, genai.FunctionResponse{
+    Name:     lightControlTool.FunctionDeclarations[0].Name,
+    Response: apiResult,
+})
+if err != nil {
+    log.Fatalf("Error sending message: %v\n", err)
+}
+
+// Show the model's response, which is expected to be text.
+for _, part := range resp.Candidates[0].Content.Parts {
+    fmt.Printf("%v\n", part)
+}

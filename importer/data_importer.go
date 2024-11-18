@@ -622,23 +622,28 @@ func (d *DataImporter) processBatch(ctx context.Context, records [][]string, hea
 }
 
 func (d *DataImporter) processRecord(ctx context.Context, record []string, headers []string, stmt *sql.Stmt) error {
-    values, err := d.transformRecord(headers, record)
-    if err != nil {
-        return err
-    }
-
-    for i := 0; i < MaxRetries; i++ {
-        if err := d.executeInsert(stmt, values); err != nil {
-            if i == MaxRetries-1 {
-                return err
-            }
-            time.Sleep(time.Duration(i+1) * 100 * time.Millisecond)
-            continue
+    select {
+    case <-ctx.Done():
+        return ctx.Err()
+    default:
+        values, err := d.transformRecord(headers, record)
+        if err != nil {
+            return err
         }
-        break
-    }
 
-    return nil
+        for i := 0; i < MaxRetries; i++ {
+            if err := d.executeInsert(stmt, values); err != nil {
+                if i == MaxRetries-1 {
+                    return err
+                }
+                time.Sleep(time.Duration(i+1) * 100 * time.Millisecond)
+                continue
+            }
+            break
+        }
+
+        return nil
+    }
 }
 
 func (d *DataImporter) executeInsert(stmt *sql.Stmt, values []interface{}) error {
