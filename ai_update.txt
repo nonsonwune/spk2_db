@@ -1,0 +1,33 @@
+[2024-01-09] Database and Model Alignment
+
+WHAT: 
+- Dropped empty 'faculties' table (redundant with active 'faculty' table)
+- Added models: CourseCodeMapping, HistoricalCourseCode, SubjectMapping2023
+- Standardized to singular naming: institutions->institution, courses->course, candidates->candidate
+- Updated foreign key constraints for renamed tables
+
+WHY:
+- Remove redundant tables
+- Ensure all tables have corresponding models
+- Maintain consistent singular naming convention
+- Keep foreign key relationships intact
+
+FILES:
++ models/course_code_mapping.go
++ models/historical_course_code.go
++ models/subject_mapping.go
++ migrations/drop_faculties_table.sql
++ migrations/standardize_table_names.sql
+
+[2024-01-09] Added InstitutionName Model
+
+WHAT:
+- Added InstitutionName model to institution.go
+- Updated Institution model to include Names relationship
+
+WHY:
+- Support historical institution naming data
+- Enable tracking of institution name changes over time
+
+FILES:
+~ models/institution.go
