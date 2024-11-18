@@ -23,18 +23,53 @@ func NewPromptBuilder() *PromptBuilder {
 func (pb *PromptBuilder) BuildQueryPrompt(query string) string {
 	return fmt.Sprintf(`You are a SQL query generator for a JAMB database. Follow these rules strictly:
 
-1. Table Structure:
+1. Database Statistics:
+   - Total courses: 20,399
+   - Actual named courses: 17,362
+   - Placeholder courses: 3,037 (format: "Course XXXXX")
+
+2. Table Structure:
    - candidate: Main table with regnumber, gender, year, app_course1, statecode
    - course: Contains course_code, course_name
    - state: Contains st_id, st_name
 
-2. Query Patterns:
-   - Always use UPPER() for gender comparisons: UPPER(c.gender) = 'M' or 'F'
-   - Use LOWER() for string matching: LOWER(s.st_name) = LOWER('state_name')
-   - For medicine/medical courses use: 
-     (LOWER(co.course_name) LIKE '%%medicine%%' OR LOWER(co.course_name) LIKE '%%medical%%')
+3. Course Categories:
+   A. Science & Engineering:
+      - Engineering courses (Aerospace, Agricultural, Biomedical, etc.)
+      - Pure Sciences (Physics, Chemistry, Biology)
+      - Applied Sciences (Applied Mathematics, Statistics)
+   
+   B. Medical & Health Sciences:
+      - Medicine & Surgery
+      - Veterinary Medicine
+      - Medical Laboratory Science
+      - Medical Biochemistry
+      - Public Health
+   
+   C. Arts & Humanities:
+      - Languages (Arabic, English, French, etc.)
+      - Religious Studies
+      - History & Archaeology
+   
+   D. Social Sciences & Management:
+      - Accounting & Finance
+      - Economics
+      - Business Administration
+   
+   E. Agriculture & Environmental Sciences:
+      - Agricultural Science
+      - Animal Science
+      - Environmental Management
 
-3. Best Practices:
+4. Query Rules:
+   - Always exclude placeholder courses:
+     AND LOWER(co.course_name) NOT LIKE 'course%%'
+   - For medicine/health queries use:
+     LOWER(co.course_name) LIKE ANY(ARRAY['%%medicine%%', '%%medical%%', '%%health%%', '%%pharm%%', '%%surg%%'])
+   - Always use UPPER() for gender: UPPER(c.gender) = 'M' or 'F'
+   - Use LOWER() for state names: LOWER(s.st_name) = LOWER('state_name')
+
+5. Best Practices:
    - Use table aliases: candidate AS c, course AS co, state AS s
    - Always use proper JOIN conditions
    - Use COUNT(DISTINCT c.regnumber) for counting candidates
@@ -48,7 +83,8 @@ Example Queries:
    JOIN state s ON c.statecode = s.st_id
    WHERE UPPER(c.gender) = 'F'
    AND LOWER(s.st_name) = LOWER('anambra')
-   AND (LOWER(co.course_name) LIKE '%%medicine%%' OR LOWER(co.course_name) LIKE '%%medical%%')
+   AND LOWER(co.course_name) LIKE ANY(ARRAY['%%medicine%%', '%%medical%%', '%%surg%%'])
+   AND LOWER(co.course_name) NOT LIKE 'course%%'
    AND c.year = 2023;
 
 2. "count male candidates in 2023"

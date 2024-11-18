@@ -1,62 +1,151 @@
 package prompts
 
-const SchemaContext = `Database Schema and Relationships:
+const SchemaContext = `Database Schema and Course Information:
 
-Tables and Their Relationships:
-1. candidate
-   - Primary Key: regnumber
-   - Foreign Keys:
-     * statecode -> state.st_id (candidate's state)
-     * inid -> institution.inid (institution applied to)
-     * lg_id -> lga.lg_id (local government area)
-     * app_course1 -> course.course_code (applied course)
+1. Database Statistics:
+   - Named courses: 1,474 (with descriptive names)
+   - Code-only courses: 3,037 (format: course_name = "Course " + course_code)
+   - Total courses: 4,511
 
-2. institution
-   - Primary Key: inid
-   - Foreign Keys:
-     * inst_state_id -> state.st_id (institution's state)
-     * affiliated_state_id -> state.st_id (affiliated state)
-     * intyp -> institution_type.intyp_id (institution type)
+2. Course Code Structure:
+   - All courses have a unique course_code (e.g., "112838K", "12267C")
+   - Some courses have descriptive names (e.g., "MEDICINE & SURGERY")
+   - Others use code-based names where course_name = "Course " + course_code
+   - IMPORTANT: Code-based courses are valid courses, not placeholders
 
-3. course
-   - Primary Key: course_code
-   - Foreign Keys:
-     * facid -> faculty.fac_id (faculty)
+3. Tables and Their Relationships:
+   - candidate
+     * Primary Key: regnumber
+     * Foreign Keys:
+       - statecode -> state.st_id (candidate's state)
+       - inid -> institution.inid (institution applied to)
+       - lg_id -> lga.lg_id (local government area)
+       - app_course1 -> course.course_code (applied course)
 
-Common Query Patterns:
-1. Candidate Statistics:
-   - Count by gender, state, institution
-   - Aggregate scores analysis
-   - Admission status
+   - course
+     * Primary Key: course_code
+     * course_name can be either:
+       - Descriptive name (e.g., "MEDICINE & SURGERY")
+       - Code-based name (e.g., "Course 112838K")
+     * Foreign Keys:
+       - facid -> faculty.fac_id (faculty)
 
-2. Institution Analysis:
-   - Admission trends
-   - Course offerings
-   - State distribution
+   - institution
+     * Primary Key: inid
+     * Foreign Keys:
+       - inst_state_id -> state.st_id (institution's state)
+       - affiliated_state_id -> state.st_id (affiliated state)
+       - intyp -> institution_type.intyp_id (institution type)
 
-3. Course Analysis:
-   - Popular courses
-   - Faculty distribution
-   - Historical changes
+4. Course Categories (Named Courses):
+   A. Medicine and Health Sciences:
+      - Medicine & Surgery
+      - Medical Laboratory Science
+      - Optometry
+      - Pharmacy
+      - Public Health
+      - Veterinary Medicine
 
-Important Notes:
-1. Always use COUNT(DISTINCT) for accurate counting
-2. Consider temporal aspects (year field)
-3. Handle NULL values appropriately
-4. Use proper table aliases
-5. Consider performance with large datasets`
+   B. Engineering:
+      - Aerospace Engineering
+      - Biomedical Engineering
+      - Chemical Engineering
+      - Civil Engineering
+      - Computer Engineering
+      - Electrical Engineering
+      - Mechanical Engineering
 
-const ExamplePatterns = `
-- For medicine-related queries, include variations like 'MEDICINE', 'MEDICAL', 'SURGERY'
-- When searching for courses, use ILIKE with wildcards (%) for flexible matching
-- For counting applications, consider grouping by course_name to show distribution
-- Example medicine query:
-  SELECT COUNT(*), co.course_name 
-  FROM candidate c 
-  JOIN course co ON c.app_course1 = co.course_code 
-  WHERE co.course_name ILIKE '%MEDICINE%' OR co.course_name ILIKE '%MEDICAL%'
-  GROUP BY co.course_name;
-`
+   C. Sciences:
+      - Biochemistry
+      - Biology
+      - Chemistry
+      - Computer Science
+      - Mathematics
+      - Physics
+      - Statistics
+
+   D. Social Sciences:
+      - Economics
+      - Geography
+      - Political Science
+      - Psychology
+      - Sociology
+
+   E. Arts and Humanities:
+      - English Language
+      - History
+      - Islamic Studies
+      - Languages (Arabic, French, Hausa, Yoruba)
+      - Religious Studies
+
+   F. Education:
+      - Adult Education
+      - Guidance & Counselling
+      - Science Education
+      - Special Education
+
+   G. Business and Management:
+      - Accounting
+      - Business Administration
+      - Marketing
+      - Project Management
+
+   H. Agriculture:
+      - Agricultural Economics
+      - Agricultural Engineering
+      - Animal Science
+      - Crop Science
+      - Fisheries
+
+5. Query Best Practices:
+   - Always use COUNT(DISTINCT) for accurate counting
+   - Consider temporal aspects (year field)
+   - Handle NULL values appropriately
+   - Use proper table aliases
+   - Consider performance with large datasets
+   - When searching for specific courses:
+     * Include both named and code-based courses unless specifically filtering
+     * Use course_code for exact matches
+     * Use LIKE on course_name for pattern matching`
+
+const ExamplePatterns = `Query Pattern Examples:
+
+1. Medicine-related Searches:
+   - For named courses only:
+     LOWER(course_name) LIKE ANY(ARRAY['%medicine%', '%medical%', '%surgery%', '%health%'])
+     AND LOWER(course_name) NOT LIKE 'course%'
+   
+   - For all courses (including code-based):
+     LOWER(course_name) LIKE ANY(ARRAY['%medicine%', '%medical%', '%surgery%', '%health%'])
+
+2. Course Code Searches:
+   - Exact match: course_code = '112838K'
+   - Pattern match: course_code LIKE '1128%'
+
+3. Named Courses Only:
+   - Pattern: LOWER(course_name) NOT LIKE 'course%'
+   
+4. Code-Based Courses Only:
+   - Pattern: LOWER(course_name) LIKE 'course%'
+
+5. Engineering Courses:
+   - Pattern: LOWER(course_name) LIKE '%engineering%'
+   - Include technology variants: '%engineering technology%'
+
+6. Science Programs:
+   - Include both pure and applied:
+     LOWER(course_name) LIKE ANY(ARRAY['%science%', '%biology%', '%chemistry%', '%physics%'])
+
+7. Language Courses:
+   - Include specific languages:
+     LOWER(course_name) LIKE ANY(ARRAY['%english%', '%french%', '%arabic%', '%hausa%', '%yoruba%'])
+
+8. Business Studies:
+   - Pattern: LOWER(course_name) LIKE ANY(ARRAY['%business%', '%management%', '%accounting%'])
+
+9. Education Programs:
+   - Include variations:
+     LOWER(course_name) LIKE ANY(ARRAY['%education%', '%teaching%', '%pedagogy%'])`
 
 const QueryExamples = `Example Queries and Their SQL:
 

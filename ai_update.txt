@@ -7,8 +7,8 @@ WHAT:
 - Added sections for change details, rationale, and technical specifics
 
 WHY:
-- Maintain clear documentation of system changes
-- Ensure consistent tracking of modifications
+- Ensure consistent documentation of system changes
+- Maintain clear historical record of modifications
 - Enable better project history tracking
 - Facilitate team communication and code review
 
@@ -1139,3 +1139,87 @@ Date: [Current Date]
    - Test with various query complexities
 
 This update significantly improves the natural language query system by leveraging Gemini's capabilities more effectively and providing better context about the database structure.
+
+[2024-01-11] JAMB Database Analysis Update
+
+## Course Name Structure Analysis
+
+1. Database Course Statistics:
+   - Total courses in database: 4,511
+   - Named courses (descriptive names): 1,474
+   - Code-based courses: 3,037
+
+2. Course Naming Patterns:
+   - Descriptive names (e.g., "MEDICINE & SURGERY")
+   - Code-based names (format: "Course " + course_code)
+     * Example: course_code "112838K" -> course_name "Course 112838K"
+     * The code in course_name exactly matches the course_code
+     * These are valid courses, not placeholders
+
+## 2023 Application Analysis
+
+1. Overall Statistics:
+   - Total candidates (2023): 1,637,356
+   - Candidates applying for code-based courses: 91,414 (5.58% of total)
+   - Distinct code-based courses applied for: 1,619
+
+2. Gender Distribution (Code-based Courses):
+   - Female: 48,588 (53.2%)
+   - Male: 42,826 (46.8%)
+
+3. Most Popular Code-based Courses (2023):
+   1. Course 103142G: 2,812 candidates
+   2. Course 108761B: 1,986 candidates
+   3. Course 106871H: 1,281 candidates
+   4. Course 103603B: 1,259 candidates
+   5. Course 101961B: 1,149 candidates
+
+4. Distribution Metrics:
+   - Average candidates per code-based course: ~56
+   - Top 5 courses account for 8,487 candidates (9.3% of total)
+
+## Historical Context
+
+1. Year Distribution:
+   - 2023: 91,414 candidates (major usage)
+   - 2019: Only 19 candidates (negligible)
+   
+2. Observations:
+   - Code-based courses are primarily a 2023 phenomenon
+   - Very low usage in 2019 suggests recent implementation
+   - Represents significant portion of 2023 applications
+
+## Query Best Practices
+
+1. Course Search Patterns:
+   ```sql
+   -- For all courses (including code-based):
+   SELECT ... FROM course WHERE ...
+
+   -- For named courses only:
+   SELECT ... FROM course 
+   WHERE course_name NOT LIKE 'Course%' AND ...
+
+   -- For code-based courses only:
+   SELECT ... FROM course 
+   WHERE course_name LIKE 'Course%' AND ...
+   ```
+
+2. Important Considerations:
+   - Code-based courses are valid entries, not placeholders
+   - Include both types unless specifically filtering
+   - Use course_code for exact matches
+   - Use LIKE on course_name for pattern matching
+
+## Next Steps
+
+1. Investigation Areas:
+   - Analyze institutional patterns for code-based courses
+   - Study geographical distribution of applicants
+   - Research potential meaning of course codes
+   - Track historical transition to code-based system
+
+2. Recommendations:
+   - Maintain support for both naming conventions
+   - Consider documenting course code meanings
+   - Track usage patterns in future years
