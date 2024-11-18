@@ -21,26 +21,43 @@ func NewPromptBuilder() *PromptBuilder {
 
 // BuildQueryPrompt creates a prompt for SQL query generation
 func (pb *PromptBuilder) BuildQueryPrompt(query string) string {
-	return fmt.Sprintf(`You are an expert SQL query generator for a JAMB database.
-Use this database schema and context to help you:
+	return fmt.Sprintf(`You are a SQL query generator for a JAMB database. Follow these rules strictly:
 
-%s
+1. Table Structure:
+   - candidate: Main table with regnumber, gender, year, app_course1, statecode
+   - course: Contains course_code, course_name
+   - state: Contains st_id, st_name
 
-Here are some example queries to learn from:
-%s
+2. Query Patterns:
+   - Always use UPPER() for gender comparisons: UPPER(c.gender) = 'M' or 'F'
+   - Use LOWER() for string matching: LOWER(s.st_name) = LOWER('state_name')
+   - For medicine/medical courses use: 
+     (LOWER(co.course_name) LIKE '%%medicine%%' OR LOWER(co.course_name) LIKE '%%medical%%')
 
-Generate a PostgreSQL query for this question:
-"%s"
+3. Best Practices:
+   - Use table aliases: candidate AS c, course AS co, state AS s
+   - Always use proper JOIN conditions
+   - Use COUNT(DISTINCT c.regnumber) for counting candidates
+   - Include year in WHERE clause when relevant
 
-Important:
-1. Only return the SQL query, no explanations
-2. Use proper table aliases (c for candidate, i for institution, etc.)
-3. Always use COUNT(DISTINCT) for counting
-4. Include appropriate JOINs based on relationships
-5. Handle NULL values appropriately
-6. Consider performance with large datasets
+Example Queries:
+1. "how many women from anambra applied for medicine in 2023"
+   SELECT COUNT(DISTINCT c.regnumber)
+   FROM candidate c
+   JOIN course co ON c.app_course1 = co.course_code
+   JOIN state s ON c.statecode = s.st_id
+   WHERE UPPER(c.gender) = 'F'
+   AND LOWER(s.st_name) = LOWER('anambra')
+   AND (LOWER(co.course_name) LIKE '%%medicine%%' OR LOWER(co.course_name) LIKE '%%medical%%')
+   AND c.year = 2023;
 
-SQL Query:`, pb.baseContext, pb.examples, query)
+2. "count male candidates in 2023"
+   SELECT COUNT(DISTINCT c.regnumber)
+   FROM candidate c
+   WHERE UPPER(c.gender) = 'M'
+   AND c.year = 2023;
+
+Now generate a SQL query for this question: %s`, query)
 }
 
 // BuildValidationPrompt creates a prompt for validating generated SQL
