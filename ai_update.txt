@@ -308,3 +308,218 @@ TECHNICAL DETAILS:
 
 FILES:
 ~ main.go (updated subject correlation analysis)
+
+[2024-01-10] Subject Correlation Analysis Further Refinement
+
+WHAT:
+- Further reduced minimum sample size from 100 to 50 records
+- Changed score filters from > 0 to >= 0 to include zero scores
+- Added debugging information to show data distribution
+  * Total candidates in latest year
+  * Top 5 subject distribution
+
+WHY:
+- Previous sample size still too restrictive
+- Include zero scores for broader analysis
+- Added debugging to understand data distribution
+- Help identify potential data quality issues
+
+TECHNICAL DETAILS:
+- Changed score filters to >= 0
+- Reduced HAVING COUNT(*) >= 100 to >= 50
+- Added debug queries for:
+  * Total candidate count
+  * Subject distribution in latest year
+
+FILES:
+~ main.go (updated subject correlation analysis and added debugging)
+
+[2024-01-10] Subject Correlation Analysis Evolution
+
+PHASE 1: Initial Implementation
+- Basic correlation analysis between subjects
+- Strict filtering criteria:
+  * Minimum 1000 samples
+  * English as Subject 1
+  * Non-zero scores only
+  * Latest year data only
+  * Direct entry candidates excluded
+
+PHASE 2: First Refinement
+- Reduced minimum sample size to 100
+- Removed direct entry filter
+- Removed English subject position restrictions
+- Maintained score quality filters (> 0)
+- Kept latest year focus
+
+PHASE 3: Further Optimization
+- Further reduced minimum sample size to 50 records
+- Changed score filters from > 0 to >= 0 to include zero scores
+- Added debugging information:
+  * Total candidates in latest year
+  * Top 5 subject distribution by count
+
+TECHNICAL CHANGES:
+1. SQL Query Modifications:
+   - Sample size thresholds: 1000 -> 100 -> 50
+   - Score filters: > 0 -> >= 0
+   - Removed WHERE clauses for:
+     * is_direct_entry
+     * English subject position
+
+2. Added Debug Queries:
+   ```sql
+   -- Total candidate count
+   SELECT COUNT(*) 
+   FROM candidate 
+   WHERE year = (SELECT MAX(year) FROM candidate)
+
+   -- Subject distribution
+   SELECT s.su_name, COUNT(*) as count
+   FROM candidate c
+   JOIN subject s ON c.subj1 = s.su_id
+   WHERE c.year = (SELECT MAX(year) FROM candidate)
+   GROUP BY s.su_name
+   ORDER BY count DESC
+   LIMIT 5
+   ```
+
+RATIONALE:
+1. Progressive relaxation of constraints to:
+   - Capture more subject combinations
+   - Include edge cases (zero scores)
+   - Better understand data distribution
+   - Identify potential data quality issues
+
+2. Added debugging to:
+   - Validate data completeness
+   - Understand subject popularity
+   - Help identify potential data anomalies
+   - Guide further optimizations
+
+FILES MODIFIED:
+~ main.go
+  * Updated subject correlation analysis query
+  * Added debugging information display
+  * Maintained core correlation logic
+  * Enhanced error handling and reporting
+
+NEXT STEPS:
+1. Monitor correlation results with new parameters
+2. Analyze debug output for data quality issues
+3. Consider additional statistical measures
+4. Evaluate need for further parameter adjustments
+
+[2024-01-10] Database Schema Normalization and Optimization
+
+WHAT:
+- Standardized column naming conventions using snake_case
+- Converted string dates to proper timestamp/date types
+- Split candidate table into focused sub-tables
+- Normalized course table column names
+- Added proper foreign key constraints and indexes
+- Implemented data validation constraints
+- Created comprehensive migration script
+
+WHY:
+- Improve data integrity and consistency
+- Optimize query performance with proper indexes
+- Better handle temporal data with appropriate types
+- Reduce data redundancy through normalization
+- Enable better data validation and constraints
+- Make schema more maintainable and scalable
+
+TECHNICAL DETAILS:
+- Created new tables: candidate_scores, candidate_disabilities, candidate_exam_info
+- Converted dateofbirth, datesaved to proper DATE/TIMESTAMP types
+- Added foreign key constraints with consistent naming
+- Created indexes for frequently queried columns
+- Added CHECK constraints for score and duration ranges
+- Standardized boolean field naming with is_ prefix
+- Implemented proper data type constraints
+
+FILES:
++ migrations/normalize_schema.sql
+~ models/candidate.go
+~ models/course.go
+
+[2024-01-10] Go Models Update for Schema Normalization
+
+WHAT:
+- Created new models for normalized tables:
+  - CandidateScore: Subject scores
+  - CandidateDisabilities: Disability information
+  - CandidateExamInfo: Exam-related data
+- Updated existing models:
+  - Candidate: Streamlined with proper relationships
+  - Course: Standardized field names and added timestamps
+
+WHY:
+- Match models to normalized database schema
+- Improve type safety with proper Go types
+- Better handle relationships between entities
+- Enable proper JSON serialization/deserialization
+- Support audit trails with timestamps
+
+TECHNICAL DETAILS:
+- Added proper Go types for all fields
+- Implemented db tags for SQL mapping
+- Added json tags with omitempty where appropriate
+- Added relationship fields with proper types
+- Included CreatedAt/UpdatedAt timestamps
+- Used sql.NullString/sql.NullInt64 for nullable fields
+- Added proper documentation comments
+
+FILES:
++ models/candidate_scores.go
++ models/candidate_disabilities.go
++ models/candidate_exam_info.go
+~ models/candidate.go
+~ models/course.go
+
+[2024-01-10] AI Update Documentation Template
+
+WHAT:
+- Added standardized AI update documentation template
+- Established consistent format for tracking changes
+- Implemented date-based entry system
+- Added sections for change details, rationale, and technical specifics
+
+WHY:
+- Ensure consistent documentation of AI-driven changes
+- Maintain clear historical record of modifications
+- Enable better tracking of project evolution
+- Facilitate team communication and code review
+
+TECHNICAL DETAILS:
+- Format includes date stamp [YYYY-MM-DD]
+- Structured sections: WHAT, WHY, TECHNICAL DETAILS
+- Modified files tracking with ~ indicator
+- Detailed listing of changes and their impacts
+
+FILES:
+~ ai_update.txt
+
+[2024-01-10] Fixed 2019 Admission Status
+
+WHAT:
+- Updated admission status for 2019 candidates
+- Set is_admitted = true for all 2019 records
+- Verified update across all years
+
+WHY:
+- Correct data inconsistency
+- Reflect actual admission status from 2019 UTME data
+- Maintain data accuracy and completeness
+
+TECHNICAL DETAILS:
+- Total 2019 candidates updated: 568,619
+- Admission status by year:
+  * 2019: 568,619 admitted (100%)
+  * 2021: 1,348,335 (admission status pending)
+  * 2023: 1,637,356 (admission status pending)
+- Update performed via direct SQL command
+- Verified update success with count validation
+
+FILES:
+~ candidate table (updated is_admitted field)

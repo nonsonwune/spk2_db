@@ -1062,7 +1062,7 @@ func displaySubjectCorrelation(ctx context.Context, db *sql.DB) error {
             JOIN subject s3 ON c.subj3 = s3.su_id
             JOIN subject s4 ON c.subj4 = s4.su_id
             WHERE c.year = (SELECT MAX(year) FROM candidate)
-            AND c.score1 > 0 AND c.score2 > 0 AND c.score3 > 0 AND c.score4 > 0
+            AND c.score1 >= 0 AND c.score2 >= 0 AND c.score3 >= 0 AND c.score4 >= 0
         ),
         SubjectStats AS (
             SELECT 
@@ -1077,7 +1077,7 @@ func displaySubjectCorrelation(ctx context.Context, db *sql.DB) error {
                 AVG(total_score) as avg_total
             FROM SubjectScores
             GROUP BY english, subject2
-            HAVING COUNT(*) >= 100
+            HAVING COUNT(*) >= 50
             
             UNION ALL
             
@@ -1093,7 +1093,7 @@ func displaySubjectCorrelation(ctx context.Context, db *sql.DB) error {
                 AVG(total_score)
             FROM SubjectScores
             GROUP BY subject2, subject3
-            HAVING COUNT(*) >= 100
+            HAVING COUNT(*) >= 50
             
             UNION ALL
             
@@ -1109,7 +1109,7 @@ func displaySubjectCorrelation(ctx context.Context, db *sql.DB) error {
                 AVG(total_score)
             FROM SubjectScores
             GROUP BY subject3, subject4
-            HAVING COUNT(*) >= 100
+            HAVING COUNT(*) >= 50
         )
         SELECT 
             subject1 as "Subject 1",
@@ -1133,6 +1133,42 @@ func displaySubjectCorrelation(ctx context.Context, db *sql.DB) error {
         return err
     }
     defer rows.Close()
+
+    // Debug: Print total number of candidates
+    var totalCount int
+    err = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM candidate WHERE year = (SELECT MAX(year) FROM candidate)").Scan(&totalCount)
+    if err != nil {
+        color.Red("Error getting total count: %v", err)
+    } else {
+        color.Yellow("\nTotal candidates in latest year: %d", totalCount)
+    }
+
+    // Debug: Print subject distribution
+    subjectQuery := `
+        SELECT s.su_name, COUNT(*) as count
+        FROM candidate c
+        JOIN subject s ON c.subj1 = s.su_id
+        WHERE c.year = (SELECT MAX(year) FROM candidate)
+        GROUP BY s.su_name
+        ORDER BY count DESC
+        LIMIT 5
+    `
+    subjectRows, err := db.QueryContext(ctx, subjectQuery)
+    if err != nil {
+        color.Red("Error getting subject distribution: %v", err)
+    } else {
+        defer subjectRows.Close()
+        color.Yellow("\nTop 5 Subject Distribution:")
+        for subjectRows.Next() {
+            var subject string
+            var count int
+            if err := subjectRows.Scan(&subject, &count); err != nil {
+                color.Red("Error scanning subject row: %v", err)
+                continue
+            }
+            color.Yellow("- %s: %d candidates", subject, count)
+        }
+    }
 
     table := tablewriter.NewWriter(os.Stdout)
     table.SetHeader([]string{

@@ -1,41 +1,35 @@
 package models
 
-import "database/sql"
+import (
+	"database/sql"
+	"time"
+)
 
 // Candidate represents the candidates table
 type Candidate struct {
-	RegNumber     string         `db:"regnumber" json:"regnumber"`
+	RegNumber     string         `db:"reg_number" json:"reg_number"`
 	Year          int            `db:"year" json:"year"`
-	MaritalStatus sql.NullString `db:"maritalstatus" json:"maritalstatus,omitempty"`
-	Challenged    sql.NullString `db:"challenged" json:"challenged,omitempty"`
-	Blind         sql.NullBool   `db:"blind" json:"blind,omitempty"`
-	Deaf          sql.NullBool   `db:"deaf" json:"deaf,omitempty"`
-	ExamTown      sql.NullString `db:"examtown" json:"examtown,omitempty"`
-	ExamCentre    sql.NullString `db:"examcentre" json:"examcentre,omitempty"`
-	ExamNo        sql.NullString `db:"examno" json:"examno,omitempty"`
+	MaritalStatus sql.NullString `db:"marital_status" json:"marital_status,omitempty"`
 	Address       sql.NullString `db:"address" json:"address,omitempty"`
-	NoOfSittings  sql.NullInt64  `db:"noofsittings" json:"noofsittings,omitempty"`
-	DateSaved     sql.NullString `db:"datesaved" json:"datesaved,omitempty"`
-	TimeSaved     sql.NullString `db:"timesaved" json:"timesaved,omitempty"`
-	MockCand      sql.NullBool   `db:"mockcand" json:"mockcand,omitempty"`
-	MockState     sql.NullInt64  `db:"mockstate" json:"mockstate,omitempty"`
-	MockTown      sql.NullString `db:"mocktown" json:"mocktown,omitempty"`
-	DateCreated   sql.NullString `db:"datecreated" json:"datecreated,omitempty"`
 	Email         sql.NullString `db:"email" json:"email,omitempty"`
-	GSMNo         sql.NullString `db:"gsmno" json:"gsmno,omitempty"`
+	GSMNo         sql.NullString `db:"gsm_no" json:"gsm_no,omitempty"`
 	Surname       sql.NullString `db:"surname" json:"surname,omitempty"`
-	FirstName     sql.NullString `db:"firstname" json:"firstname,omitempty"`
-	MiddleName    sql.NullString `db:"middlename" json:"middlename,omitempty"`
-	DateOfBirth   sql.NullString `db:"dateofbirth" json:"dateofbirth,omitempty"`
+	FirstName     sql.NullString `db:"first_name" json:"first_name,omitempty"`
+	MiddleName    sql.NullString `db:"middle_name" json:"middle_name,omitempty"`
+	DateOfBirth   time.Time      `db:"date_of_birth" json:"date_of_birth"`
 	Gender        sql.NullString `db:"gender" json:"gender,omitempty"`
-	StateCode     sql.NullInt64  `db:"statecode" json:"statecode,omitempty"`
-	Subj1         sql.NullInt64  `db:"subj1" json:"subj1,omitempty"`
-	Score1        sql.NullInt64  `db:"score1" json:"score1,omitempty"`
-	Subj2         sql.NullInt64  `db:"subj2" json:"subj2,omitempty"`
-	Score2        sql.NullInt64  `db:"score2" json:"score2,omitempty"`
-	Subj3         sql.NullInt64  `db:"subj3" json:"subj3,omitempty"`
-	Score3        sql.NullInt64  `db:"score3" json:"score3,omitempty"`
-	Subj4         sql.NullInt64  `db:"subj4" json:"subj4,omitempty"`
-	Score4        sql.NullInt64  `db:"score4" json:"score4,omitempty"`
-	Aggregate     sql.NullInt64  `db:"aggregate" json:"aggregate,omitempty"`
+	StateCode     sql.NullInt64  `db:"state_code" json:"state_code,omitempty"`
+	LGID          sql.NullInt64  `db:"lg_id" json:"lg_id,omitempty"`
+	IsAdmitted    sql.NullBool   `db:"is_admitted" json:"is_admitted,omitempty"`
+	IsDirectEntry sql.NullBool   `db:"is_direct_entry" json:"is_direct_entry,omitempty"`
+	Malpractice   sql.NullString `db:"malpractice" json:"malpractice,omitempty"`
+	CreatedAt     time.Time      `db:"created_at" json:"created_at"`
+	UpdatedAt     time.Time      `db:"updated_at" json:"updated_at"`
+
+	// Relationships
+	State           *State                 `db:"-" json:"state,omitempty"`
+	LGA             *LGA                   `db:"-" json:"lga,omitempty"`
+	Scores          []CandidateScore       `db:"-" json:"scores,omitempty"`
+	Disabilities    *CandidateDisabilities `db:"-" json:"disabilities,omitempty"`
+	ExamInfo        *CandidateExamInfo     `db:"-" json:"exam_info,omitempty"`
 }
