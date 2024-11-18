@@ -1,0 +1,1341 @@
+package importer
+
+import (
+	"database/sql"
+	"encoding/csv"
+	"fmt"
+	"log"
+	"os"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+	"path/filepath"
+	"unicode"
+)
+
+// ColumnMapping defines how source columns map to destination columns
+type ColumnMapping struct {
+	SourceColumn      string
+	DestinationColumn string
+	TransformFunc     func(string) (interface{}, error)
+}
+
+// ImportConfig holds the configuration for data import
+type ImportConfig struct {
+	Year            int
+	SourceFile      string
+	IsAdmission     bool // New field to indicate if this is admission data
+	RequiredColumns  []string
+	BatchSize        int
+	ValidateOnly     bool
+	ColumnMappings   []ColumnMapping
+	WorkerCount      int // Number of parallel workers to use
+	InstitutionID    int
+}
+
+// StateMapper handles conversion between state names and IDs
+type StateMapper struct {
+	db        *sql.DB
+	nameToID  map[string]int
+	prepared  bool
+	initOnce  sync.Once
+}
+
+func NewStateMapper(db *sql.DB) *StateMapper {
+	return &StateMapper{
+		db:       db,
+		nameToID: make(map[string]int),
+	}
+}
+
+func (sm *StateMapper) init() error {
+	var err error
+	sm.initOnce.Do(func() {
+		// Initialize the map
+		sm.nameToID = make(map[string]int)
+
+		query := `SELECT st_id, st_name FROM state`
+		rows, queryErr := sm.db.Query(query)
+		if queryErr != nil {
+			err = queryErr
+			return
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var id int
+			var name string
+			if scanErr := rows.Scan(&id, &name); scanErr != nil {
+				err = scanErr
+				return
+			}
+			
+			// Store the name as is since it's already in uppercase
+			sm.nameToID[name] = id
+			
+			// Add debug logging
+			log.Printf("Loaded state mapping: %s -> %d", name, id)
+		}
+		sm.prepared = true
+	})
+	return err
+}
+
+func (sm *StateMapper) GetStateID(stateName string) (int, error) {
+	if !sm.prepared {
+		if err := sm.init(); err != nil {
+			return 0, fmt.Errorf("failed to initialize state mapper: %v", err)
+		}
+	}
+
+	// Convert input to uppercase to match database format
+	cleanName := strings.ToUpper(strings.TrimSpace(stateName))
+	
+	// Handle special cases
+	specialCases := map[string]string{
+		"FCT ABUJA":                "FCT",
+		"FEDERAL CAPITAL TERRITORY": "FCT",
+		"ABUJA":                    "FCT",
+		"AKWA-IBOM":               "AKWA IBOM",
+		"CROSS-RIVER":             "CROSS RIVER",
+		"NASARAWA":                "NASSARAWA",
+		"AFRICA":                  "FOREIGNER",
+		"WEST AFRICA":             "FOREIGNER",
+		"REPUBLIC OF BENIN":       "COTONOU",
+		"COTE D'IVORIE":           "COTE D VOIRE",
+		"COTE D'IVOIRE":           "COTE D VOIRE",
+	}
+
+	if mapped, ok := specialCases[cleanName]; ok {
+		cleanName = mapped
+	}
+
+	// Try direct lookup first
+	if id, ok := sm.nameToID[cleanName]; ok {
+		return id, nil
+	}
+
+	// If no exact match, try fuzzy matching
+	rows, err := sm.db.Query("SELECT st_id, st_name FROM state")
+	if err != nil {
+		return 0, fmt.Errorf("error querying states: %v", err)
+	}
+	defer rows.Close()
+
+	// Store all state mappings for logging
+	stateMappings := make(map[string]int)
+	var closestMatch string
+	var closestID int
+	var minDistance int = 1000
+
+	for rows.Next() {
+		var id int
+		var name string
+		if err := rows.Scan(&id, &name); err != nil {
+			continue
+		}
+		stateMappings[name] = id
+
+		// Calculate Levenshtein distance
+		distance := levenshteinDistance(cleanName, name)
+		if distance < minDistance {
+			minDistance = distance
+			closestMatch = name
+			closestID = id
+		}
+	}
+
+	// If we found a reasonably close match (distance <= 2)
+	if minDistance <= 2 {
+		log.Printf("State %s matched to %s with ID: %d", stateName, closestMatch, closestID)
+		return closestID, nil
+	}
+
+	// Log available mappings for debugging
+	log.Printf("State not found: %s. Available mappings:", cleanName)
+	for name, id := range stateMappings {
+		log.Printf("  %s -> %d", name, id)
+	}
+
+	return 0, fmt.Errorf("state not found: %s", cleanName)
+}
+
+// CourseMapper handles validation of course codes and manages historical code tracking.
+// When historical course data becomes available:
+// 1. Import the historical course data for the specific year
+// 2. Run the reconciliation process to update mapped codes
+// 3. Update candidate records with the new course codes
+// 4. Mark reconciled records in historical_course_codes
+//
+// This process should be run whenever new historical course data is imported.
+type CourseMapper struct {
+	db         *sql.DB
+	courseCodes map[string]bool
+	prepared   bool
+	initOnce   sync.Once
+}
+
+func NewCourseMapper(db *sql.DB) *CourseMapper {
+	return &CourseMapper{
+		db:         db,
+		courseCodes: make(map[string]bool),
+	}
+}
+
+func (cm *CourseMapper) init() error {
+	var err error
+	cm.initOnce.Do(func() {
+		// Initialize the map
+		cm.courseCodes = make(map[string]bool)
+
+		query := `SELECT corcode FROM courses`
+		rows, queryErr := cm.db.Query(query)
+		if queryErr != nil {
+			err = queryErr
+			return
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var code string
+			if scanErr := rows.Scan(&code); scanErr != nil {
+				err = scanErr
+				return
+			}
+			cm.courseCodes[code] = true
+			
+			// Add debug logging
+			log.Printf("Loaded course code: %s", code)
+		}
+		cm.prepared = true
+	})
+	return err
+}
+
+func (cm *CourseMapper) ValidateCourseCode(courseCode string, year int, institutionID int) error {
+	if !cm.prepared {
+		if err := cm.init(); err != nil {
+			return fmt.Errorf("failed to initialize course mapper: %v", err)
+		}
+	}
+
+	// Try exact match first
+	if cm.courseCodes[courseCode] {
+		return nil
+	}
+
+	// Store historical code
+	err := cm.storeHistoricalCode(courseCode, year, institutionID)
+	if err != nil {
+		log.Printf("Warning: Failed to store historical code: %v", err)
+	}
+
+	// Return special error type for historical codes
+	return &HistoricalCourseError{
+		CourseCode:    courseCode,
+		Year:          year,
+		InstitutionID: institutionID,
+	}
+}
+
+func (cm *CourseMapper) storeHistoricalCode(courseCode string, year int, institutionID int) error {
+	query := `
+        INSERT INTO historical_course_codes (year, old_course_code, institution_id, import_timestamp)
+        VALUES ($1, $2, $3, NOW())
+        ON CONFLICT (year, old_course_code, institution_id) DO NOTHING
+    `
+	_, err := cm.db.Exec(query, year, courseCode, institutionID)
+	return err
+}
+
+// HistoricalCourseError represents an error for historical course codes
+type HistoricalCourseError struct {
+	CourseCode    string
+	Year          int
+	InstitutionID int
+}
+
+func (e *HistoricalCourseError) Error() string {
+	return fmt.Sprintf("historical course code: %s (Year: %d, Institution: %d)", 
+		e.CourseCode, e.Year, e.InstitutionID)
+}
+
+// InstitutionMapper handles validation and transformation of institution codes
+type InstitutionMapper struct {
+	db           *sql.DB
+	institutions map[string]string  // maps input codes to valid institution IDs
+	prepared     bool
+	initOnce     sync.Once
+}
+
+func NewInstitutionMapper(db *sql.DB) *InstitutionMapper {
+	return &InstitutionMapper{
+		db:           db,
+		institutions: make(map[string]string),
+	}
+}
+
+func (im *InstitutionMapper) init() error {
+	var err error
+	im.initOnce.Do(func() {
+		// Initialize the map
+		im.institutions = make(map[string]string)
+
+		query := `SELECT inid, inabv, inname FROM institutions`
+		rows, queryErr := im.db.Query(query)
+		if queryErr != nil {
+			err = queryErr
+			return
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var id, abbrev, name string
+			if scanErr := rows.Scan(&id, &abbrev, &name); scanErr != nil {
+				err = scanErr
+				return
+			}
+			
+			// Store mappings
+			im.institutions[id] = id // Direct mapping
+			if abbrev != "" {
+				im.institutions[abbrev] = id // Map abbreviation to ID
+			}
+			
+			// Add debug logging
+			log.Printf("Loaded institution mapping: %s -> %s (abbrev: %s)", id, id, abbrev)
+		}
+		im.prepared = true
+	})
+	return err
+}
+
+func (im *InstitutionMapper) GetInstitutionID(code string) (string, error) {
+	if !im.prepared {
+		if err := im.init(); err != nil {
+			return "", fmt.Errorf("failed to initialize institution mapper: %v", err)
+		}
+	}
+
+	// Clean and standardize input
+	code = strings.TrimSpace(code)
+	
+	// Direct lookup
+	if id, exists := im.institutions[code]; exists {
+		return id, nil
+	}
+
+	// Log unmatched institution code
+	log.Printf("Warning: No matching institution found for code: %s", code)
+	return "", fmt.Errorf("invalid institution code: %s", code)
+}
+
+// DataImporter handles the import process
+type DataImporter struct {
+	db           *sql.DB
+	config       ImportConfig
+	stateMapper  *StateMapper
+	courseMapper *CourseMapper
+	institutionMapper *InstitutionMapper
+}
+
+func NewDataImporter(db *sql.DB, config ImportConfig) *DataImporter {
+	return &DataImporter{
+		db:           db,
+		config:       config,
+		stateMapper:  NewStateMapper(db),
+		courseMapper: NewCourseMapper(db),
+		institutionMapper: NewInstitutionMapper(db),
+	}
+}
+
+// validateHeaders checks if all required columns are present
+func (d *DataImporter) validateHeaders(headers []string) error {
+	headerMap := make(map[string]bool)
+	for _, h := range headers {
+		headerMap[strings.TrimSpace(strings.ToLower(h))] = true
+	}
+
+	for _, required := range d.config.RequiredColumns {
+		if !headerMap[strings.ToLower(required)] {
+			return fmt.Errorf("required column missing: %s", required)
+		}
+	}
+	return nil
+}
+
+// getColumnIndex returns the index of a column in headers
+func getColumnIndex(headers []string, columnName string) int {
+    for i, header := range headers {
+        if strings.EqualFold(header, columnName) {
+            return i
+        }
+    }
+    return -1
+}
+
+// ImportResult represents the result of importing a chunk of records
+type ImportResult struct {
+    SuccessCount int
+    FailedCount  int
+    ChunkIndex   int
+    Errors       []error
+}
+
+func (d *DataImporter) importChunk(records [][]string, headers []string, startIndex int) ImportResult {
+    result := ImportResult{
+        ChunkIndex: startIndex,
+    }
+
+    for _, record := range records {
+        // Transform the record
+        transformedRecord, err := d.transformRecord(headers, record)
+        if err != nil {
+            result.FailedCount++
+            result.Errors = append(result.Errors, fmt.Errorf("row %d: %v", startIndex+result.SuccessCount+result.FailedCount, err))
+            continue
+        }
+
+        // Insert the record
+        if !d.config.ValidateOnly {
+            err = d.insertRecord(transformedRecord)
+            if err != nil {
+                result.FailedCount++
+                result.Errors = append(result.Errors, fmt.Errorf("row %d: %v", startIndex+result.SuccessCount+result.FailedCount, err))
+                continue
+            }
+        }
+
+        result.SuccessCount++
+    }
+
+    return result
+}
+
+func (d *DataImporter) prepareInsertStatement(tx *sql.Tx) (*sql.Stmt, error) {
+    columns := []string{
+        "regnumber", "maritalstatus", "challenged", "blind", "deaf",
+        "examtown", "examcentre", "examno", "address", "noofsittings",
+        "datesaved", "timesaved", "mockcand", "mockstate", "mocktown",
+        "datecreated", "email", "gsmno", "surname", "firstname",
+        "middlename", "dateofbirth", "gender", "statecode",
+        "subj1", "score1", "subj2", "score2", "subj3", "score3",
+        "subj4", "score4", "aggregate", "app_course1", "inid",
+        "lg_id", "year", "is_admitted"}
+
+    placeholders := make([]string, len(columns))
+    for i := range columns {
+        placeholders[i] = fmt.Sprintf("$%d", i+1)
+    }
+
+    query := fmt.Sprintf(
+        "INSERT INTO candidates (%s) VALUES (%s) ON CONFLICT (regnumber) DO UPDATE SET %s",
+        strings.Join(columns, ", "),
+        strings.Join(placeholders, ", "),
+        buildUpdateClause(columns))
+
+    return tx.Prepare(query)
+}
+
+func (d *DataImporter) transformRecord(headers []string, record []string) ([]interface{}, error) {
+    values := make([]interface{}, 0, len(d.config.ColumnMappings))
+
+    // Add values in the same order as the columns in prepareInsertStatement
+    for _, mapping := range d.config.ColumnMappings {
+        idx := getColumnIndex(headers, mapping.SourceColumn)
+        if idx == -1 || idx >= len(record) {
+            // For year field, use the year from config
+            if mapping.DestinationColumn == "year" {
+                values = append(values, d.config.Year)
+                continue
+            }
+            values = append(values, nil)
+            continue
+        }
+
+        value, err := mapping.TransformFunc(record[idx])
+        if err != nil {
+            return nil, fmt.Errorf("error transforming %s: %v", mapping.SourceColumn, err)
+        }
+        values = append(values, value)
+    }
+
+    return values, nil
+}
+
+func (d *DataImporter) insertRecord(record []interface{}) error {
+    // Start a transaction for this record
+    tx, err := d.db.Begin()
+    if err != nil {
+        return fmt.Errorf("error starting transaction: %v", err)
+    }
+    defer func() {
+        if err != nil {
+            tx.Rollback()
+        }
+    }()
+
+    stmt, err := d.prepareInsertStatement(tx)
+    if err != nil {
+        return fmt.Errorf("error preparing statement: %v", err)
+    }
+    defer stmt.Close()
+
+    _, err = stmt.Exec(record...)
+    if err != nil {
+        return fmt.Errorf("error inserting record: %v", err)
+    }
+
+    // Commit the transaction
+    if err = tx.Commit(); err != nil {
+        return fmt.Errorf("error committing transaction: %v", err)
+    }
+
+    return nil
+}
+
+func (d *DataImporter) ImportData(reader *csv.Reader) error {
+    // Start a transaction
+    tx, err := d.db.Begin()
+    if err != nil {
+        return fmt.Errorf("error starting transaction: %v", err)
+    }
+    defer tx.Rollback()
+
+    // Initialize mappers if not already done
+    if d.stateMapper == nil {
+        if err := d.initStateMapper(); err != nil {
+            return fmt.Errorf("failed to initialize state mapper: %v", err)
+        }
+    }
+
+    if d.courseMapper == nil {
+        if err := d.initCourseMapper(); err != nil {
+            return fmt.Errorf("failed to initialize course mapper: %v", err)
+        }
+    }
+
+    if d.institutionMapper == nil {
+        if err := d.initInstitutionMapper(); err != nil {
+            return fmt.Errorf("failed to initialize institution mapper: %v", err)
+        }
+    }
+
+    // Prepare the insert statement
+    stmt, err := d.prepareInsertStatement(tx)
+    if err != nil {
+        return fmt.Errorf("error preparing statement: %v", err)
+    }
+    defer stmt.Close()
+
+    headers, err := reader.Read()
+    if err != nil {
+        return fmt.Errorf("error reading headers: %v", err)
+    }
+
+    // Read all records
+    allRecords, err := reader.ReadAll()
+    if err != nil {
+        return fmt.Errorf("error reading records: %v", err)
+    }
+
+    // Track failed records
+    failedIndices := make(map[int]error)
+    var mu sync.Mutex
+
+    // Use configured worker count or default to 4
+    workerCount := d.config.WorkerCount
+    if workerCount <= 0 {
+        workerCount = 4
+    }
+    
+    recordsPerWorker := (len(allRecords) + workerCount - 1) / workerCount
+    
+    // Create channels for results
+    results := make(chan ImportResult, workerCount)
+    var wg sync.WaitGroup
+
+    // Process chunks in parallel
+    for i := 0; i < workerCount; i++ {
+        start := i * recordsPerWorker
+        end := start + recordsPerWorker
+        if end > len(allRecords) {
+            end = len(allRecords)
+        }
+
+        if start >= len(allRecords) {
+            break
+        }
+
+        chunk := allRecords[start:end]
+        wg.Add(1)
+        
+        go func(chunk [][]string, startIndex int) {
+            defer wg.Done()
+            result := d.importChunk(chunk, headers, startIndex)
+            
+            // Track failed records
+            mu.Lock()
+            for i, err := range result.Errors {
+                failedIndices[startIndex+i] = err
+            }
+            mu.Unlock()
+            
+            results <- result
+        }(chunk, start)
+    }
+
+    // Wait for all chunks to be processed
+    go func() {
+        wg.Wait()
+        close(results)
+    }()
+
+    // Collect results
+    totalSuccess := 0
+    totalFailed := 0
+    var allErrors []error
+
+    // Collect results from all workers
+    for result := range results {
+        totalSuccess += result.SuccessCount
+        totalFailed += result.FailedCount
+        allErrors = append(allErrors, result.Errors...)
+    }
+
+    // Print summary
+    log.Printf("\nImport Summary:")
+    log.Printf("Total Records Processed: %d", totalSuccess+totalFailed)
+    log.Printf("Successfully Imported: %d (%.2f%%)", 
+        totalSuccess, 
+        float64(totalSuccess)/float64(totalSuccess+totalFailed)*100)
+    log.Printf("Failed Records: %d (%.2f%%)", 
+        totalFailed,
+        float64(totalFailed)/float64(totalSuccess+totalFailed)*100)
+
+    if len(allErrors) > 0 {
+        log.Printf("\nSample of Import Errors (up to 10):")
+        for i := 0; i < min(10, len(allErrors)); i++ {
+            log.Printf("- %v", allErrors[i])
+        }
+    }
+
+    // Save failed records if any
+    if totalFailed > 0 {
+        if err := d.SaveFailedRecords(allRecords, headers, failedIndices); err != nil {
+            log.Printf("Warning: Failed to save failed records: %v", err)
+        }
+        return fmt.Errorf("import completed with %d failed records", totalFailed)
+    }
+
+    // Commit the transaction
+    if err = tx.Commit(); err != nil {
+        return fmt.Errorf("error committing transaction: %v", err)
+    }
+
+    return nil
+}
+
+func (d *DataImporter) initStateMapper() error {
+    d.stateMapper = NewStateMapper(d.db)
+    return d.stateMapper.init()
+}
+
+func (d *DataImporter) initCourseMapper() error {
+    d.courseMapper = NewCourseMapper(d.db)
+    return d.courseMapper.init()
+}
+
+func (d *DataImporter) initInstitutionMapper() error {
+    d.institutionMapper = NewInstitutionMapper(d.db)
+    return d.institutionMapper.init()
+}
+
+type ChunkResult struct {
+    FailedImports []FailedImport
+    ProcessedRows int
+    ChunkIndex    int
+}
+
+func (d *DataImporter) processChunk(records [][]string, headers []string, startIndex int) ChunkResult {
+    result := ChunkResult{
+        ChunkIndex: startIndex,
+    }
+
+    // Get column indexes based on mappings
+    regNumberIdx := getColumnIndex(headers, "RegNumber")
+    courseCodeIdx := getColumnIndex(headers, "CourseCode")
+    stateIdx := getColumnIndex(headers, "State")
+    genderIdx := getColumnIndex(headers, "Gender")
+
+    for _, record := range records {
+        result.ProcessedRows++
+        
+        // Try to transform the record
+        _, err := d.transformRecord(headers, record)
+        if err != nil {
+            failed := FailedImport{
+                RowData:    record,
+                FailReason: err.Error(),
+            }
+
+            // Get specific fields if they exist
+            if regNumberIdx >= 0 && regNumberIdx < len(record) {
+                failed.RegNumber = record[regNumberIdx]
+            }
+            if courseCodeIdx >= 0 && courseCodeIdx < len(record) {
+                failed.CourseCode = record[courseCodeIdx]
+            }
+            if stateIdx >= 0 && stateIdx < len(record) {
+                failed.StateCode = record[stateIdx]
+            }
+            if genderIdx >= 0 && genderIdx < len(record) {
+                failed.Gender = record[genderIdx]
+            }
+
+            result.FailedImports = append(result.FailedImports, failed)
+        }
+    }
+
+    return result
+}
+
+func (d *DataImporter) AnalyzeFailedImports(filename string) ([]FailedImport, error) {
+    // Initialize the column mappings if not already done
+    if d.config.ColumnMappings == nil {
+        d.config.ColumnMappings = d.DefaultColumnMappings()
+    }
+
+    // Initialize the state mapper if not already done
+    if d.stateMapper == nil {
+        if err := d.initStateMapper(); err != nil {
+            return nil, fmt.Errorf("failed to initialize state mapper: %v", err)
+        }
+    }
+
+    // Initialize the course mapper if not already done
+    if d.courseMapper == nil {
+        if err := d.initCourseMapper(); err != nil {
+            return nil, fmt.Errorf("failed to initialize course mapper: %v", err)
+        }
+    }
+
+    if d.institutionMapper == nil {
+        if err := d.initInstitutionMapper(); err != nil {
+            return nil, fmt.Errorf("failed to initialize institution mapper: %v", err)
+        }
+    }
+
+    file, err := os.Open(filename)
+    if err != nil {
+        return nil, fmt.Errorf("error opening file: %v", err)
+    }
+    defer file.Close()
+
+    reader := csv.NewReader(file)
+    headers, err := reader.Read()
+    if err != nil {
+        return nil, fmt.Errorf("error reading headers: %v", err)
+    }
+
+    // Read all records
+    allRecords, err := reader.ReadAll()
+    if err != nil {
+        return nil, fmt.Errorf("error reading records: %v", err)
+    }
+
+    // Use configured worker count or default to 4
+    workerCount := d.config.WorkerCount
+    if workerCount <= 0 {
+        workerCount = 4
+    }
+    
+    recordsPerWorker := (len(allRecords) + workerCount - 1) / workerCount
+    
+    // Create channels for results and errors
+    results := make(chan ChunkResult, workerCount)
+    var wg sync.WaitGroup
+
+    // Process chunks in parallel
+    for i := 0; i < workerCount; i++ {
+        start := i * recordsPerWorker
+        end := start + recordsPerWorker
+        if end > len(allRecords) {
+            end = len(allRecords)
+        }
+
+        if start >= len(allRecords) {
+            break
+        }
+
+        chunk := allRecords[start:end]
+        wg.Add(1)
+        
+        go func(chunk [][]string, startIndex int) {
+            defer wg.Done()
+            result := d.processChunk(chunk, headers, startIndex)
+            results <- result
+        }(chunk, start)
+    }
+
+    // Start a goroutine to close results channel after all workers are done
+    go func() {
+        wg.Wait()
+        close(results)
+    }()
+
+    // Collect results
+    var allFailedImports []FailedImport
+    totalProcessed := 0
+
+    // Collect all results from the channel
+    for result := range results {
+        allFailedImports = append(allFailedImports, result.FailedImports...)
+        totalProcessed += result.ProcessedRows
+    }
+
+    // Print analysis
+    if len(allFailedImports) > 0 {
+        log.Printf("\nAnalysis of Failed Imports:")
+        log.Printf("Total Records Processed: %d", totalProcessed)
+        log.Printf("Total Failed Records: %d (%.2f%%)\n", 
+            len(allFailedImports), 
+            float64(len(allFailedImports))/float64(totalProcessed)*100)
+
+        // Count failures by reason
+        reasonCounts := make(map[string]int)
+        for _, f := range allFailedImports {
+            reasonCounts[f.FailReason]++
+        }
+
+        log.Printf("\nFailure Reasons:")
+        for reason, count := range reasonCounts {
+            log.Printf("- %s: %d occurrences (%.2f%%)", 
+                reason, 
+                count,
+                float64(count)/float64(len(allFailedImports))*100)
+        }
+
+        // Show sample of failed records
+        log.Printf("\nSample Failed Records (up to 10):")
+        for i := 0; i < min(10, len(allFailedImports)); i++ {
+            f := allFailedImports[i]
+            log.Printf("Row %d:", i+1)
+            log.Printf("  RegNumber: %s", f.RegNumber)
+            log.Printf("  CourseCode: %s", f.CourseCode)
+            log.Printf("  State: %s", f.StateCode)
+            log.Printf("  Gender: %s", f.Gender)
+            log.Printf("  Reason: %s\n", f.FailReason)
+        }
+    } else {
+        log.Printf("\nNo failed imports found in the file.")
+    }
+
+    return allFailedImports, nil
+}
+
+type FailedImport struct {
+    RegNumber   string
+    CourseCode  string
+    StateCode   string
+    Gender      string
+    FailReason  string
+    ErrorCode   string    // Added field for error tracking
+    Timestamp   time.Time // Added field for error timing
+    RowNumber   int      // Added field for source tracking
+    SourceFile  string   // Added field for file tracking
+    RowData     []string
+}
+
+type ImportError struct {
+    Code      string
+    Message   string
+    Timestamp time.Time
+    Context   map[string]string
+}
+
+func (e *ImportError) Error() string {
+    return fmt.Sprintf("[%s] %s", e.Code, e.Message)
+}
+
+func ImportData(db *sql.DB, config ImportConfig, reader *csv.Reader) error {
+    importer := NewDataImporter(db, config)
+    
+    // If no column mappings are provided, use the defaults
+    if len(config.ColumnMappings) == 0 {
+        importer.config.ColumnMappings = importer.DefaultColumnMappings()
+    }
+    
+    return importer.ImportData(reader)
+}
+
+func buildUpdateClause(columns []string) string {
+    updates := make([]string, 0, len(columns))
+    for _, col := range columns {
+        if col != "regnumber" { // Skip primary key in updates
+            updates = append(updates, fmt.Sprintf("%s = EXCLUDED.%s", col, col))
+        }
+    }
+    return strings.Join(updates, ", ")
+}
+
+func (d *DataImporter) SaveFailedRecords(records [][]string, headers []string, failedIndices map[int]error) error {
+    if len(failedIndices) == 0 {
+        return nil
+    }
+
+    // Create failed records directory if it doesn't exist
+    failedDir := "failed_imports"
+    if err := os.MkdirAll(failedDir, 0755); err != nil {
+        return fmt.Errorf("error creating failed_imports directory: %v", err)
+    }
+
+    // Create failed records file with timestamp
+    timestamp := time.Now().Format("20060102_150405")
+    failedFile := filepath.Join(failedDir, fmt.Sprintf("failed_records_%s.csv", timestamp))
+    
+    file, err := os.Create(failedFile)
+    if err != nil {
+        return fmt.Errorf("error creating failed records file: %v", err)
+    }
+    defer file.Close()
+
+    writer := csv.NewWriter(file)
+    defer writer.Flush()
+
+    // Write headers
+    if err := writer.Write(append(headers, "Error")); err != nil {
+        return fmt.Errorf("error writing headers: %v", err)
+    }
+
+    // Write failed records with error messages
+    for idx, err := range failedIndices {
+        if idx < len(records) {
+            record := append(records[idx], err.Error())
+            if err := writer.Write(record); err != nil {
+                return fmt.Errorf("error writing record: %v", err)
+            }
+        }
+    }
+
+    log.Printf("Failed records saved to: %s", failedFile)
+    return nil
+}
+
+func (d *DataImporter) transformState(s string) (interface{}, error) {
+    if s == "" {
+        return nil, nil
+    }
+
+    // Clean the input
+    s = strings.TrimSpace(strings.ToUpper(s))
+    s = strings.ReplaceAll(s, "-", " ")
+
+    // Map foreign states to their standard names
+    foreignStates := map[string]string{
+        "COTE D VOIRE": "COTE D'IVOIRE",
+        "COTE D'VOIRE": "COTE D'IVOIRE",
+        "COTE DE VOIRE": "COTE D'IVOIRE",
+        "COTE DIVOIRE": "COTE D'IVOIRE",
+        "IVORY COAST": "COTE D'IVOIRE",
+        "CAMEROUN": "CAMEROON",
+        "CAMEROONS": "CAMEROON",
+        "LONDON": "UNITED KINGDOM",
+        "UK": "UNITED KINGDOM",
+        "BRITAIN": "UNITED KINGDOM",
+        "ENGLAND": "UNITED KINGDOM",
+        "JEDDAH": "SAUDI ARABIA",
+        "SA": "SAUDI ARABIA",
+        "RSA": "SOUTH AFRICA",
+        "GHANA": "GHANA",
+        "COTONOU": "BENIN REPUBLIC",
+        "BENIN": "BENIN REPUBLIC",
+    }
+
+    // Map foreign state names if found
+    if mappedState, ok := foreignStates[s]; ok {
+        s = mappedState
+    }
+
+    // Try exact match first
+    id, err := d.stateMapper.GetStateID(s)
+    if err == nil {
+        return id, nil
+    }
+
+    // If not found, try fuzzy matching
+    // Split into words and try each word
+    s = strings.ReplaceAll(s, "-", " ")
+    words := strings.Fields(s)
+    
+    // Try each word
+    for _, word := range words {
+        id, err := d.stateMapper.GetStateID(word)
+        if err == nil {
+            return id, nil
+        }
+    }
+
+    // Default to ID STATE if no match found
+    return 99, nil
+}
+
+func (d *DataImporter) transformCourse(s string) (interface{}, error) {
+    if s == "" {
+        return nil, nil
+    }
+
+    // Clean and standardize the course code
+    s = strings.TrimSpace(strings.ToUpper(s))
+    
+    // Remove any non-alphanumeric characters
+    s = strings.Map(func(r rune) rune {
+        if unicode.IsLetter(r) || unicode.IsNumber(r) {
+            return r
+        }
+        return -1
+    }, s)
+
+    // Ensure the course code follows the correct format (e.g., 100202H)
+    if len(s) != 7 {
+        return nil, fmt.Errorf("invalid course code format: %s", s)
+    }
+
+    // Check if the course exists
+    var exists bool
+    err := d.db.QueryRow("SELECT EXISTS(SELECT 1 FROM courses WHERE corcode = $1)", s).Scan(&exists)
+    if err != nil {
+        return nil, fmt.Errorf("error checking course existence: %v", err)
+    }
+
+    if !exists {
+        // Course doesn't exist, create it
+        _, err = d.db.Exec(`
+            INSERT INTO courses (corcode, "COURSE NAME") 
+            VALUES ($1, $2) 
+            ON CONFLICT (corcode) DO NOTHING`, 
+            s, fmt.Sprintf("Course %s", s))
+        if err != nil {
+            return nil, fmt.Errorf("error creating course: %v", err)
+        }
+    }
+
+    return s, nil
+}
+
+func (d *DataImporter) transformLGA(s string) (interface{}, error) {
+    if s == "" {
+        return nil, nil
+    }
+
+    // Try to convert directly to integer first
+    if lgID, err := strconv.Atoi(s); err == nil {
+        // Verify the LGA ID exists
+        var exists bool
+        err := d.db.QueryRow("SELECT EXISTS(SELECT 1 FROM lga WHERE lg_id = $1)", lgID).Scan(&exists)
+        if err != nil {
+            return nil, fmt.Errorf("error checking LGA existence: %v", err)
+        }
+        if exists {
+            return lgID, nil
+        }
+    }
+
+    // If not a valid ID, try to find by name
+    s = strings.TrimSpace(strings.ToUpper(s))
+    s = strings.ReplaceAll(s, "-", " ")
+
+    var lgID int
+    err := d.db.QueryRow(`
+        SELECT lg_id 
+        FROM lga 
+        WHERE UPPER(lg_name) = $1 
+        OR UPPER(lg_abreviation) = $1
+        LIMIT 1`, s).Scan(&lgID)
+
+    if err == nil {
+        return lgID, nil
+    }
+
+    // If exact match fails, try fuzzy matching
+    rows, err := d.db.Query(`
+        SELECT lg_id, lg_name, lg_abreviation 
+        FROM lga 
+        WHERE lg_st_id = (
+            SELECT lg_st_id 
+            FROM lga 
+            GROUP BY lg_st_id 
+            ORDER BY COUNT(*) DESC 
+            LIMIT 1
+        )`)
+    if err != nil {
+        return nil, fmt.Errorf("error querying LGAs: %v", err)
+    }
+    defer rows.Close()
+
+    var bestMatch struct {
+        id       int
+        distance int
+    }
+    bestMatch.distance = 1000
+
+    for rows.Next() {
+        var id int
+        var name, abbr string
+        if err := rows.Scan(&id, &name, &abbr); err != nil {
+            continue
+        }
+
+        // Try matching against both name and abbreviation
+        nameDist := levenshteinDistance(s, strings.ToUpper(name))
+        abbrDist := levenshteinDistance(s, strings.ToUpper(abbr))
+
+        // Use the better match
+        dist := min(nameDist, abbrDist)
+        if dist < bestMatch.distance {
+            bestMatch.id = id
+            bestMatch.distance = dist
+        }
+    }
+
+    // If we found a reasonably close match
+    if bestMatch.distance <= 3 {
+        return bestMatch.id, nil
+    }
+
+    // Default to a common LGA if no match found
+    return 101, nil // Default to first LGA (Aba North)
+}
+
+func (d *DataImporter) transformInstitution(s string) (interface{}, error) {
+    if s == "" {
+        return nil, nil
+    }
+
+    // Clean and standardize input
+    s = strings.TrimSpace(s)
+    
+    // Direct lookup
+    id, err := d.institutionMapper.GetInstitutionID(s)
+    if err != nil {
+        return nil, fmt.Errorf("error transforming institution code: %v", err)
+    }
+
+    return id, nil
+}
+
+func (d *DataImporter) transformAdmission(s string) (interface{}, error) {
+    if d.config.IsAdmission {
+        return true, nil
+    }
+    return nil, nil
+}
+
+func transformBool(s string) (interface{}, error) {
+    if s == "" {
+        return nil, nil
+    }
+    s = strings.ToLower(strings.TrimSpace(s))
+    switch s {
+    case "true", "t", "yes", "y", "1":
+        return true, nil
+    case "false", "f", "no", "n", "0":
+        return false, nil
+    default:
+        return false, nil // Default to false for any other value
+    }
+}
+
+func transformString(s string) (interface{}, error) {
+    return strings.TrimSpace(s), nil
+}
+
+func transformInt(s string) (interface{}, error) {
+	if s == "" {
+		return nil, nil
+	}
+	return strconv.Atoi(s)
+}
+
+func transformDate(s string) (interface{}, error) {
+	if s == "" {
+		return nil, nil
+	}
+	// Add date format validation if needed
+	return s, nil
+}
+
+type ImportStats struct {
+    TotalProcessed  int
+    ValidRecords    int
+    SkippedRecords  int
+    ErrorsByType    map[string]int
+    InvalidCourses  map[string]int
+}
+
+func NewImportStats() *ImportStats {
+    return &ImportStats{
+        ErrorsByType:   make(map[string]int),
+        InvalidCourses: make(map[string]int),
+    }
+}
+
+func (s *ImportStats) AddError(errType string) {
+    s.ErrorsByType[errType]++
+    s.SkippedRecords++
+}
+
+func (s *ImportStats) AddInvalidCourse(courseCode string) {
+    s.InvalidCourses[courseCode]++
+}
+
+func (s *ImportStats) PrintSummary() {
+    log.Printf("\nImport Statistics:")
+    log.Printf("Total Records Processed: %d", s.TotalProcessed)
+    log.Printf("Successfully Imported: %d", s.ValidRecords)
+    log.Printf("Skipped Records: %d", s.SkippedRecords)
+    
+    if len(s.ErrorsByType) > 0 {
+        log.Printf("\nErrors by Type:")
+        for errType, count := range s.ErrorsByType {
+            log.Printf("- %s: %d occurrences", errType, count)
+        }
+    }
+    
+    if len(s.InvalidCourses) > 0 {
+        log.Printf("\nMost Common Invalid Course Codes:")
+        // Convert map to slice for sorting
+        type courseError struct {
+            code  string
+            count int
+        }
+        courses := make([]courseError, 0, len(s.InvalidCourses))
+        for code, count := range s.InvalidCourses {
+            courses = append(courses, courseError{code, count})
+        }
+        sort.Slice(courses, func(i, j int) bool {
+            return courses[i].count > courses[j].count
+        })
+        
+        // Show top 10 most common invalid courses
+        for i := 0; i < min(10, len(courses)); i++ {
+            log.Printf("- %s: %d occurrences", courses[i].code, courses[i].count)
+        }
+    }
+}
+
+func (d *DataImporter) DefaultColumnMappings() []ColumnMapping {
+    // These are the columns we have in the CSV:
+    // RegNumber,Lga,Gender,InstitutionCode,CourseCode,FacultyID,State,DateofBirth,Institution,Course
+    return []ColumnMapping{
+        // Map CSV columns in order
+        {"RegNumber", "regnumber", transformString},
+        {"MaritalStatus", "maritalstatus", func(s string) (interface{}, error) { return nil, nil }},
+        {"Challenged", "challenged", func(s string) (interface{}, error) { return nil, nil }},
+        {"Blind", "blind", func(s string) (interface{}, error) { return false, nil }},
+        {"Deaf", "deaf", func(s string) (interface{}, error) { return false, nil }},
+        {"ExamTown", "examtown", func(s string) (interface{}, error) { return nil, nil }},
+        {"ExamCentre", "examcentre", func(s string) (interface{}, error) { return nil, nil }},
+        {"ExamNo", "examno", func(s string) (interface{}, error) { return nil, nil }},
+        {"Address", "address", func(s string) (interface{}, error) { return nil, nil }},
+        {"NoOfSittings", "noofsittings", func(s string) (interface{}, error) { return nil, nil }},
+        {"DateSaved", "datesaved", func(s string) (interface{}, error) { return nil, nil }},
+        {"TimeSaved", "timesaved", func(s string) (interface{}, error) { return nil, nil }},
+        {"MockCand", "mockcand", func(s string) (interface{}, error) { return false, nil }},
+        {"MockState", "mockstate", func(s string) (interface{}, error) { return nil, nil }},
+        {"MockTown", "mocktown", func(s string) (interface{}, error) { return nil, nil }},
+        {"DateCreated", "datecreated", func(s string) (interface{}, error) { return nil, nil }},
+        {"Email", "email", func(s string) (interface{}, error) { return nil, nil }},
+        {"GSMNo", "gsmno", func(s string) (interface{}, error) { return nil, nil }},
+        {"Surname", "surname", func(s string) (interface{}, error) { return nil, nil }},
+        {"FirstName", "firstname", func(s string) (interface{}, error) { return nil, nil }},
+        {"MiddleName", "middlename", func(s string) (interface{}, error) { return nil, nil }},
+        {"DateofBirth", "dateofbirth", transformString},
+        {"Gender", "gender", transformGender},
+        {"State", "statecode", d.transformState},
+        {"Subj1", "subj1", func(s string) (interface{}, error) { return nil, nil }},
+        {"Score1", "score1", func(s string) (interface{}, error) { return nil, nil }},
+        {"Subj2", "subj2", func(s string) (interface{}, error) { return nil, nil }},
+        {"Score2", "score2", func(s string) (interface{}, error) { return nil, nil }},
+        {"Subj3", "subj3", func(s string) (interface{}, error) { return nil, nil }},
+        {"Score3", "score3", func(s string) (interface{}, error) { return nil, nil }},
+        {"Subj4", "subj4", func(s string) (interface{}, error) { return nil, nil }},
+        {"Score4", "score4", func(s string) (interface{}, error) { return nil, nil }},
+        {"Aggregate", "aggregate", func(s string) (interface{}, error) { return nil, nil }},
+        {"CourseCode", "app_course1", d.transformCourse},
+        {"InstitutionCode", "inid", d.transformInstitution}, // Institution ID is varchar in DB
+        {"Lga", "lg_id", transformInt},
+        {"Year", "year", func(s string) (interface{}, error) { return d.config.Year, nil }},
+        {"IsAdmitted", "is_admitted", d.transformAdmission},
+    }
+}
+
+func levenshteinDistance(s1, s2 string) int {
+	if len(s1) == 0 {
+		return len(s2)
+	}
+	if len(s2) == 0 {
+		return len(s1)
+	}
+
+	// Create matrix
+	matrix := make([][]int, len(s1)+1)
+	for i := range matrix {
+		matrix[i] = make([]int, len(s2)+1)
+	}
+
+	// Initialize first row and column
+	for i := 0; i <= len(s1); i++ {
+		matrix[i][0] = i
+	}
+	for j := 0; j <= len(s2); j++ {
+		matrix[0][j] = j
+	}
+
+	// Fill in the rest of the matrix
+	for i := 1; i <= len(s1); i++ {
+		for j := 1; j <= len(s2); j++ {
+			if s1[i-1] == s2[j-1] {
+				matrix[i][j] = matrix[i-1][j-1]
+			} else {
+				matrix[i][j] = min(
+					matrix[i-1][j]+1,  // deletion
+					matrix[i][j-1]+1,  // insertion
+					matrix[i-1][j-1]+1, // substitution
+				)
+			}
+		}
+	}
+
+	return matrix[len(s1)][len(s2)]
+}
+
+func min(numbers ...int) int {
+    if len(numbers) == 0 {
+        return 0
+    }
+    result := numbers[0]
+    for _, num := range numbers[1:] {
+        if num < result {
+            result = num
+        }
+    }
+    return result
+}
+
+func transformGender(s string) (interface{}, error) {
+    if s == "" {
+        return nil, nil
+    }
+    s = strings.ToUpper(strings.TrimSpace(s))
+    switch s {
+    case "M", "MALE":
+        return "M", nil
+    case "F", "FEMALE":
+        return "F", nil
+    default:
+        return nil, fmt.Errorf("invalid gender value: %s", s)
+    }
+}
