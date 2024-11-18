@@ -135,42 +135,44 @@ func handleMenuChoice(ctx context.Context, db *sql.DB, choice string) error {
     case "1":
         return searchCandidates(ctx, db)
     case "2":
-        return displayTopPerformers(ctx, db)
+        return handleCourseImport(ctx, db)
     case "3":
-        return displayGenderStats(ctx, db)
-    case "4":
-        return displayStateDistribution(ctx, db)
-    case "5":
-        return displaySubjectStats(ctx, db)
-    case "6":
-        return displayAggregateDistribution(ctx, db)
-    case "7":
-        return displayCourseAnalysis(ctx, db)
-    case "8":
-        return displayInstitutionStats(ctx, db)
-    case "9":
-        return displayFacultyPerformance(ctx, db)
-    case "10":
-        return displayGeographicAnalysis(ctx, db)
-    case "11":
-        return displayYearComparison(ctx, db)
-    case "12":
-        return displayAdmissionTrends(ctx, db)
-    case "13":
-        return handleCandidateImport(ctx, db)
-    case "14":
         return handleAnalyzeFailedImports(ctx, db)
+    case "4":
+        return displayTopPerformers(ctx, db)
+    case "5":
+        return displayGenderStats(ctx, db)
+    case "6":
+        return displayStateDistribution(ctx, db)
+    case "7":
+        return displaySubjectStats(ctx, db)
+    case "8":
+        return displayAggregateDistribution(ctx, db)
+    case "9":
+        return displayCourseAnalysis(ctx, db)
+    case "10":
+        return displayInstitutionStats(ctx, db)
+    case "11":
+        return displayFacultyPerformance(ctx, db)
+    case "12":
+        return displayGeographicAnalysis(ctx, db)
+    case "13":
+        return displayYearComparison(ctx, db)
+    case "14":
+        return displayAdmissionTrends(ctx, db)
     case "15":
-        return displayPerformanceMetrics(ctx, db)
+        return handleCandidateImport(ctx, db)
     case "16":
-        return displayInstitutionRanking(ctx, db)
+        return displayPerformanceMetrics(ctx, db)
     case "17":
-        return displaySubjectCorrelation(ctx, db)
+        return displayInstitutionRanking(ctx, db)
     case "18":
-        return displayRegionalPerformance(ctx, db)
+        return displaySubjectCorrelation(ctx, db)
     case "19":
-        return displayCourseCompetitiveness(ctx, db)
+        return displayRegionalPerformance(ctx, db)
     case "20":
+        return displayCourseCompetitiveness(ctx, db)
+    case "21":
         return handleNaturalLanguageQuery(ctx, db)
     case "0":
         return errExit
@@ -180,29 +182,33 @@ func handleMenuChoice(ctx context.Context, db *sql.DB, choice string) error {
 }
 
 func displayMenu() {
-    color.Green("\nJAMB Database Analysis System")
-    color.Green("============================")
-    fmt.Println("1. Search Candidates")
-    fmt.Println("2. Top Performers")
-    fmt.Println("3. Gender Statistics")
-    fmt.Println("4. State Distribution")
-    fmt.Println("5. Subject Statistics")
-    fmt.Println("6. Aggregate Score Distribution")
-    fmt.Println("7. Course Analysis")
-    fmt.Println("8. Institution Statistics")
-    fmt.Println("9. Faculty Performance")
-    fmt.Println("10. Geographic Analysis")
-    fmt.Println("11. Year-over-Year Comparison")
-    fmt.Println("12. Admission Trends")
-    fmt.Println("13. Import Candidates")
-    fmt.Println("14. Analyze Failed Imports")
-    fmt.Println("15. Performance Metrics")
-    fmt.Println("16. Institution Ranking")
-    fmt.Println("17. Subject Correlation")
-    fmt.Println("18. Regional Performance")
-    fmt.Println("19. Course Competitiveness")
-    fmt.Println("20. Natural Language Query")
-    fmt.Println("0. Exit")
+    color.Cyan("\nJAMB Database Analysis System")
+    fmt.Println("\nData Management:")
+    fmt.Println("1. Import Candidate Data")
+    fmt.Println("2. Import Course Data")
+    fmt.Println("3. Analyze Failed Imports")
+    fmt.Println("\nData Analysis:")
+    fmt.Println("4. Top Performers")
+    fmt.Println("5. Gender Statistics")
+    fmt.Println("6. State Distribution")
+    fmt.Println("7. Subject Statistics")
+    fmt.Println("8. Aggregate Score Distribution")
+    fmt.Println("9. Course Analysis")
+    fmt.Println("10. Institution Statistics")
+    fmt.Println("11. Faculty Performance")
+    fmt.Println("12. Geographic Analysis")
+    fmt.Println("13. Year-over-Year Comparison")
+    fmt.Println("14. Admission Trends")
+    fmt.Println("\nAdvanced Analysis:")
+    fmt.Println("15. Import Candidates")
+    fmt.Println("16. Performance Metrics")
+    fmt.Println("17. Institution Ranking")
+    fmt.Println("18. Subject Correlation")
+    fmt.Println("19. Regional Performance")
+    fmt.Println("20. Course Competitiveness")
+    fmt.Println("\nNatural Language Query:")
+    fmt.Println("21. Natural Language Query")
+    fmt.Println("\n0. Exit")
     fmt.Print("\nEnter your choice: ")
 }
 
@@ -1307,6 +1313,65 @@ func displayCourseCompetitiveness(ctx context.Context, db *sql.DB) error {
 
     color.Cyan("\nTop 20 Most Competitive Courses (Latest Year)")
     table.Render()
+    return nil
+}
+
+func handleCourseImport(ctx context.Context, db *sql.DB) error {
+    fmt.Print("Enter the course CSV file path: ")
+    filename := readString()
+
+    // Verify file exists
+    if _, err := os.Stat(filename); os.IsNotExist(err) {
+        color.Red("File does not exist: %s", filename)
+        return fmt.Errorf("file not found: %s", err)
+    }
+
+    fmt.Print("\nReady to import course data from ", filename)
+    fmt.Print("\nThis will update existing course names if they are currently using code-based names.")
+    fmt.Print("\nProceed with import? (y/n): ")
+
+    if strings.ToLower(readString()) == "y" {
+        // Create a child context with timeout
+        importCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+        defer cancel()
+
+        // Show progress indicator
+        go func() {
+            ticker := time.NewTicker(1 * time.Second)
+            defer ticker.Stop()
+
+            for {
+                select {
+                case <-importCtx.Done():
+                    return
+                case <-ticker.C:
+                    fmt.Print(".")
+                }
+            }
+        }()
+
+        fmt.Print("\nImporting courses")
+        
+        if err := importer.ImportCourses(importCtx, db, filename); err != nil {
+            fmt.Println() // New line after progress dots
+            switch {
+            case err == context.DeadlineExceeded:
+                color.Red("Import timed out after 5 minutes")
+                return fmt.Errorf("import timed out: %w", err)
+            case err == context.Canceled:
+                color.Yellow("Import was cancelled")
+                return fmt.Errorf("import cancelled: %w", err)
+            default:
+                color.Red("Error importing courses: %v", err)
+                return fmt.Errorf("import error: %w", err)
+            }
+        }
+
+        fmt.Println() // New line after progress dots
+        color.Green("Course import completed successfully!")
+    } else {
+        fmt.Println("Import cancelled.")
+    }
     return nil
 }
 

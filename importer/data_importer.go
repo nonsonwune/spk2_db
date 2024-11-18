@@ -172,23 +172,16 @@ func (sm *StateMapper) GetStateID(stateName string) (int, error) {
 }
 
 // CourseMapper handles validation of course codes and manages historical code tracking.
-// When historical course data becomes available:
-// 1. Import the historical course data for the specific year
-// 2. Run the reconciliation process to update mapped codes
-// 3. Update candidate records with the new course codes
-// 4. Mark reconciled records in historical_course_codes
-//
-// This process should be run whenever new historical course data is imported.
 type CourseMapper struct {
-	db         *sql.DB
+	db          *sql.DB
 	courseCodes map[string]bool
-	prepared   bool
-	initOnce   sync.Once
+	prepared    bool
+	initOnce    sync.Once
 }
 
 func NewCourseMapper(db *sql.DB) *CourseMapper {
 	return &CourseMapper{
-		db:         db,
+		db:          db,
 		courseCodes: make(map[string]bool),
 	}
 }
@@ -221,6 +214,30 @@ func (cm *CourseMapper) init() error {
 		cm.prepared = true
 	})
 	return err
+}
+
+func (cm *CourseMapper) UpsertCourse(courseCode, courseName string) error {
+	query := `
+        INSERT INTO courses (corcode, "COURSE NAME")
+        VALUES ($1, $2)
+        ON CONFLICT (corcode) 
+        DO UPDATE SET 
+            "COURSE NAME" = EXCLUDED."COURSE NAME"
+            WHERE courses."COURSE NAME" LIKE 'Course%'  -- Only update if current name is a code-based name
+        RETURNING "COURSE NAME";`
+
+	var updatedName string
+	err := cm.db.QueryRow(query, courseCode, courseName).Scan(&updatedName)
+	if err != nil {
+		return fmt.Errorf("failed to upsert course: %w", err)
+	}
+
+	// Log the change if it was updated
+	if updatedName != "Course "+courseCode {
+		log.Printf("Updated course %s: %s -> %s", courseCode, "Course "+courseCode, updatedName)
+	}
+
+	return nil
 }
 
 func (cm *CourseMapper) ValidateCourseCode(courseCode string, year int, institutionID int) error {
@@ -1485,4 +1502,74 @@ func max(a, b int) int {
         return a
     }
     return b
+}
+
+func ImportCourses(ctx context.Context, db *sql.DB, filename string) error {
+    file, err := os.Open(filename)
+    if err != nil {
+        return fmt.Errorf("error opening file: %w", err)
+    }
+    defer file.Close()
+
+    reader := csv.NewReader(file)
+    headers, err := reader.Read()
+    if err != nil {
+        return fmt.Errorf("error reading headers: %w", err)
+    }
+
+    // Find column indices
+    codeIdx := -1
+    nameIdx := -1
+    for i, header := range headers {
+        switch strings.ToLower(strings.TrimSpace(header)) {
+        case "course_code":
+            codeIdx = i
+        case "course_name":
+            nameIdx = i
+        }
+    }
+
+    if codeIdx == -1 || nameIdx == -1 {
+        return fmt.Errorf("required columns 'course_code' and 'course_name' not found in CSV")
+    }
+
+    courseMapper := NewCourseMapper(db)
+    var updated, skipped int
+
+    // Start a transaction
+    tx, err := db.BeginTx(ctx, nil)
+    if err != nil {
+        return fmt.Errorf("failed to start transaction: %w", err)
+    }
+    defer tx.Rollback()
+
+    for {
+        record, err := reader.Read()
+        if err == io.EOF {
+            break
+        }
+        if err != nil {
+            return fmt.Errorf("error reading record: %w", err)
+        }
+
+        courseCode := strings.TrimSpace(record[codeIdx])
+        courseName := strings.TrimSpace(record[nameIdx])
+
+        if courseCode == "" || courseName == "" {
+            skipped++
+            continue
+        }
+
+        if err := courseMapper.UpsertCourse(courseCode, courseName); err != nil {
+            return fmt.Errorf("error upserting course %s: %w", courseCode, err)
+        }
+        updated++
+    }
+
+    if err := tx.Commit(); err != nil {
+        return fmt.Errorf("failed to commit transaction: %w", err)
+    }
+
+    log.Printf("Course import completed: %d updated, %d skipped", updated, skipped)
+    return nil
 }
