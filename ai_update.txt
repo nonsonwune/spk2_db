@@ -597,3 +597,81 @@ TECHNICAL DETAILS:
 
 FILES:
 ~ importer/data_importer.go
+
+[2024-01-11] Subject Correlation Analysis Fix
+
+Issue:
+Subject correlation analysis was not showing any results despite having valid subject data.
+
+Changes Made:
+1. Query Structure:
+   - Split into three CTEs: EnglishScores, OtherSubjectScores, and SubjectCorrelations
+   - Properly pair English scores with other subject scores using proper joins
+   - Removed problematic MAX aggregations that were losing correlations
+
+2. Statistical Improvements:
+   - Added minimum sample size requirement (n ≥ 1000)
+   - Added standard deviation checks to ensure valid correlation calculations
+   - Improved correlation calculation accuracy
+
+3. Code Quality:
+   - Better error handling and variable naming
+   - Cleaner output formatting
+   - Removed redundant debug information
+
+Technical Details:
+- Use proper joins between candidate_scores and subject tables
+- Ensure statistical significance with larger sample sizes
+- Add proper null checks and error handling
+- Improve data presentation with better table formatting
+
+Files Modified:
+- main.go: Updated displaySubjectCorrelation function
+
+[2024-01-11] Today's Updates
+
+WHAT:
+1. Fixed course competitiveness query:
+   - Changed column reference from c.course_code to c.app_course1
+   - Removed redundant column alias
+   - Removed redundant WHERE condition since filtering is done in CTE
+   - Added proper sorting and limiting
+
+2. Analyzed Physics course applications:
+   - Pure Physics: 13,007 candidates (avg score: 76.22)
+   - Education & Physics: 4,964 candidates (avg score: 53.03)
+   - Total Physics-related applications: ~25,000 across 30 variants
+   - Highest scoring variant: Industrial Physics with Applied Geophysics (avg: 130.83)
+   - Lowest scoring variant: Pure & Industrial Physics (avg: 18.00)
+
+3. Fixed subject correlation analysis:
+   - Updated query to use candidate_scores table instead of direct columns
+   - Implemented proper joins with subject table
+   - Added filtering for English Language as base subject
+   - Improved correlation calculation using proper aggregation
+   - Added better result formatting and sorting
+
+Changes made to:
+- main.go: Updated SQL queries for course competitiveness and subject correlations
+- Verified working queries against production database
+- Improved error handling and result presentation
+
+4. Fixed subject distribution queries:
+   - Updated both main subject stats and debug distribution queries
+   - Now using candidate_scores table for accurate subject data
+   - Added ranking to show top performing subjects
+   - Included total candidates and average scores in results
+   - Improved table formatting for better readability
+
+Technical details:
+- Used window functions (RANK()) to identify top subjects by score
+- Added proper JOINs between candidate, candidate_scores, and subject tables
+- Improved grouping and aggregation for more accurate statistics
+- Enhanced error handling and result presentation
+
+Changes made to:
+- main.go: Updated displaySubjectStats and subject distribution debug query
+- Improved table formatting and output presentation
+
+FILES:
+~ main.go

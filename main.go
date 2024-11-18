@@ -373,17 +373,27 @@ func displayStateDistribution(ctx context.Context, db *sql.DB) error {
 
 func displaySubjectStats(ctx context.Context, db *sql.DB) error {
     query := `
-        SELECT s.su_name, AVG(CASE 
-            WHEN c.subj1 = s.su_id THEN c.score1
-            WHEN c.subj2 = s.su_id THEN c.score2
-            WHEN c.subj3 = s.su_id THEN c.score3
-            WHEN c.subj4 = s.su_id THEN c.score4
-        END) as avg_score
-        FROM subject s
-        JOIN candidate c ON 
-            s.su_id IN (c.subj1, c.subj2, c.subj3, c.subj4)
-        GROUP BY s.su_name
-        ORDER BY avg_score DESC
+        WITH RankedSubjects AS (
+            SELECT 
+                s.su_name,
+                cs.score,
+                COUNT(*) as count,
+                RANK() OVER (PARTITION BY cs.cand_reg_number ORDER BY cs.score DESC) as score_rank
+            FROM candidate c
+            JOIN candidate_scores cs ON c.regnumber = cs.cand_reg_number AND c.year = cs.year
+            JOIN subject s ON cs.subject_id = s.su_id
+            WHERE c.year = (SELECT MAX(year) FROM candidate)
+            GROUP BY s.su_name, cs.score, cs.cand_reg_number
+        )
+        SELECT 
+            su_name,
+            COUNT(*) as total_candidates,
+            ROUND(AVG(score)::numeric, 2) as avg_score
+        FROM RankedSubjects
+        WHERE score_rank = 1
+        GROUP BY su_name
+        ORDER BY total_candidates DESC
+        LIMIT 5;
     `
 
     rows, err := db.QueryContext(ctx, query)
@@ -395,19 +405,21 @@ func displaySubjectStats(ctx context.Context, db *sql.DB) error {
 
     color.Yellow("\nAverage Scores by Subject")
     table := tablewriter.NewWriter(os.Stdout)
-    table.SetHeader([]string{"Subject", "Average Score"})
+    table.SetHeader([]string{"Subject", "Total Candidates", "Average Score"})
 
     for rows.Next() {
         var subject string
+        var totalCandidates int
         var avgScore float64
 
-        err := rows.Scan(&subject, &avgScore)
+        err := rows.Scan(&subject, &totalCandidates, &avgScore)
         if err != nil {
             continue
         }
 
         table.Append([]string{
             subject,
+            fmt.Sprintf("%d", totalCandidates),
             fmt.Sprintf("%.2f", avgScore),
         })
     }
@@ -688,9 +700,10 @@ func displayYearComparison(ctx context.Context, db *sql.DB) error {
 func displayAdmissionTrends(ctx context.Context, db *sql.DB) error {
     query := `
         WITH course_stats AS (
-            SELECT c.course_name,
-                   COUNT(*) as applicants,
-                   PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY ca.aggregate) as cutoff_score
+            SELECT 
+                c.course_name,
+                COUNT(*) as applicants,
+                PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY ca.aggregate) as cutoff_score
             FROM course c
             JOIN candidate ca ON c.course_code = ca.app_course1
             GROUP BY c.course_name
@@ -1044,88 +1057,55 @@ func displayInstitutionRanking(ctx context.Context, db *sql.DB) error {
 
 func displaySubjectCorrelation(ctx context.Context, db *sql.DB) error {
     query := `
-        WITH SubjectScores AS (
+        WITH EnglishScores AS (
             SELECT 
-                s1.su_name as english,
-                s2.su_name as subject2,
-                s3.su_name as subject3,
-                s4.su_name as subject4,
-                c.score1 as english_score,
-                c.score2 as score2,
-                c.score3 as score3,
-                c.score4 as score4,
-                c.aggregate as total_score
-            FROM candidate c
-            JOIN subject s1 ON c.subj1 = s1.su_id
-            JOIN subject s2 ON c.subj2 = s2.su_id
-            JOIN subject s3 ON c.subj3 = s3.su_id
-            JOIN subject s4 ON c.subj4 = s4.su_id
-            WHERE c.year = (SELECT MAX(year) FROM candidate)
-            AND c.score1 >= 0 AND c.score2 >= 0 AND c.score3 >= 0 AND c.score4 >= 0
+                cs.cand_reg_number,
+                cs.score as english_score
+            FROM candidate_scores cs
+            JOIN subject s ON cs.subject_id = s.su_id
+            WHERE s.su_name = 'USE OF ENGLISH'
+            AND cs.year = (SELECT MAX(year) FROM candidate)
         ),
-        SubjectStats AS (
+        OtherSubjectScores AS (
             SELECT 
-                english as subject1,
-                subject2 as subject2,
-                CORR(english_score, score2) as correlation,
+                cs.cand_reg_number,
+                s.su_name as subject_name,
+                cs.score as subject_score
+            FROM candidate_scores cs
+            JOIN subject s ON cs.subject_id = s.su_id
+            WHERE s.su_name != 'USE OF ENGLISH'
+            AND cs.year = (SELECT MAX(year) FROM candidate)
+        ),
+        SubjectCorrelations AS (
+            SELECT 
+                o.subject_name,
                 COUNT(*) as sample_size,
-                AVG(english_score) as avg_score1,
-                AVG(score2) as avg_score2,
-                STDDEV(english_score) as stddev1,
-                STDDEV(score2) as stddev2,
-                AVG(total_score) as avg_total
-            FROM SubjectScores
-            GROUP BY english, subject2
-            HAVING COUNT(*) >= 50
-            
-            UNION ALL
-            
-            SELECT 
-                subject2,
-                subject3,
-                CORR(score2, score3),
-                COUNT(*),
-                AVG(score2),
-                AVG(score3),
-                STDDEV(score2),
-                STDDEV(score3),
-                AVG(total_score)
-            FROM SubjectScores
-            GROUP BY subject2, subject3
-            HAVING COUNT(*) >= 50
-            
-            UNION ALL
-            
-            SELECT 
-                subject3,
-                subject4,
-                CORR(score3, score4),
-                COUNT(*),
-                AVG(score3),
-                AVG(score4),
-                STDDEV(score3),
-                STDDEV(score4),
-                AVG(total_score)
-            FROM SubjectScores
-            GROUP BY subject3, subject4
-            HAVING COUNT(*) >= 50
+                CORR(e.english_score, o.subject_score) as correlation,
+                AVG(e.english_score) as avg_english,
+                AVG(o.subject_score) as avg_subject,
+                STDDEV(e.english_score) as stddev_english,
+                STDDEV(o.subject_score) as stddev_subject
+            FROM EnglishScores e
+            JOIN OtherSubjectScores o ON e.cand_reg_number = o.cand_reg_number
+            GROUP BY o.subject_name
+            HAVING COUNT(*) >= 1000  -- Ensure statistical significance
+            AND STDDEV(e.english_score) > 0 
+            AND STDDEV(o.subject_score) > 0
         )
         SELECT 
-            subject1 as "Subject 1",
-            subject2 as "Subject 2",
+            'USE OF ENGLISH' as subject1,
+            subject_name as subject2,
             ROUND(correlation::numeric, 3) as correlation,
             sample_size,
-            ROUND(avg_score1::numeric, 2) as avg_score1,
-            ROUND(avg_score2::numeric, 2) as avg_score2,
-            ROUND(stddev1::numeric, 2) as stddev1,
-            ROUND(stddev2::numeric, 2) as stddev2,
-            ROUND(avg_total::numeric, 2) as avg_total_score
-        FROM SubjectStats
+            ROUND(avg_english::numeric, 2) as avg_score1,
+            ROUND(avg_subject::numeric, 2) as avg_score2,
+            ROUND(stddev_english::numeric, 2) as stddev1,
+            ROUND(stddev_subject::numeric, 2) as stddev2
+        FROM SubjectCorrelations
         WHERE correlation IS NOT NULL
-        ORDER BY correlation DESC
-        LIMIT 15;
+        ORDER BY ABS(correlation) DESC;
     `
-    
+
     rows, err := db.QueryContext(ctx, query)
     if err != nil {
         color.Red("Error fetching subject correlations: %v", err)
@@ -1133,92 +1113,53 @@ func displaySubjectCorrelation(ctx context.Context, db *sql.DB) error {
     }
     defer rows.Close()
 
-    // Debug: Print total number of candidates
-    var totalCount int
-    err = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM candidate WHERE year = (SELECT MAX(year) FROM candidate)").Scan(&totalCount)
-    if err != nil {
-        color.Red("Error getting total count: %v", err)
-    } else {
-        color.Yellow("\nTotal candidates in latest year: %d", totalCount)
-    }
-
-    // Debug: Print subject distribution
-    subjectQuery := `
-        SELECT s.su_name, COUNT(*) as count
-        FROM candidate c
-        JOIN subject s ON c.subj1 = s.su_id
-        WHERE c.year = (SELECT MAX(year) FROM candidate)
-        GROUP BY s.su_name
-        ORDER BY count DESC
-        LIMIT 5
-    `
-    subjectRows, err := db.QueryContext(ctx, subjectQuery)
-    if err != nil {
-        color.Red("Error getting subject distribution: %v", err)
-    } else {
-        defer subjectRows.Close()
-        color.Yellow("\nTop 5 Subject Distribution:")
-        for subjectRows.Next() {
-            var subject string
-            var count int
-            if err := subjectRows.Scan(&subject, &count); err != nil {
-                color.Red("Error scanning subject row: %v", err)
-                continue
-            }
-            color.Yellow("- %s: %d candidates", subject, count)
-        }
-    }
-
     table := tablewriter.NewWriter(os.Stdout)
     table.SetHeader([]string{
         "Subject 1", 
         "Subject 2", 
         "Correlation", 
         "Sample Size",
-        "Avg Score 1",
-        "Avg Score 2",
-        "StdDev 1",
+        "Avg Score 1", 
+        "Avg Score 2", 
+        "StdDev 1", 
         "StdDev 2",
-        "Avg Total",
     })
 
-    hasData := false
+    hasRows := false
     for rows.Next() {
-        var subj1, subj2 string
-        var correlation float64
-        var sampleSize int
-        var avgScore1, avgScore2, stdDev1, stdDev2, avgTotal float64
-        
-        if err := rows.Scan(&subj1, &subj2, &correlation, &sampleSize, &avgScore1, &avgScore2, &stdDev1, &stdDev2, &avgTotal); err != nil {
+        hasRows = true
+        var (
+            subject1, subject2 string
+            correlation        float64
+            sampleSize        int
+            avgScore1, avgScore2, stdDev1, stdDev2 float64
+        )
+
+        if err := rows.Scan(&subject1, &subject2, &correlation, &sampleSize,
+            &avgScore1, &avgScore2, &stdDev1, &stdDev2); err != nil {
             color.Red("Error scanning row: %v", err)
             continue
         }
-        
-        hasData = true
+
         table.Append([]string{
-            subj1,
-            subj2,
+            subject1,
+            subject2,
             fmt.Sprintf("%.3f", correlation),
             fmt.Sprintf("%d", sampleSize),
             fmt.Sprintf("%.2f", avgScore1),
             fmt.Sprintf("%.2f", avgScore2),
             fmt.Sprintf("%.2f", stdDev1),
             fmt.Sprintf("%.2f", stdDev2),
-            fmt.Sprintf("%.2f", avgTotal),
         })
     }
 
-    color.Cyan("\nSubject Score Correlations (Latest Year)")
-    if hasData {
-        table.Render()
-        color.Yellow("\nAnalysis of how subject scores relate to each other:")
-        color.Yellow("1. Correlation shows how scores in two subjects move together")
-        color.Yellow("2. Higher correlation (closer to +1.0) means students who do well in one subject")
-        color.Yellow("   tend to do well in the other subject too")
-        color.Yellow("3. Lower correlation (closer to -1.0) means opposite performance")
+    color.Cyan("\nSubject Score Correlations (Latest Year)\n")
+    if !hasRows {
+        color.Yellow("No significant correlations found between subjects.")
     } else {
-        color.Yellow("\nNo significant correlations found between subjects.")
+        table.Render()
     }
+
     return nil
 }
 
