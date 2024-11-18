@@ -34,7 +34,7 @@ func RunTests() {
 	defer engine.Close()
 
 	fmt.Println("Testing Natural Language Queries...")
-	fmt.Println("===================================\n")
+	fmt.Print("===================================\n\n")
 
 	// Test queries
 	queries := []string{
@@ -54,6 +54,6 @@ func RunTests() {
 		if err := engine.ProcessQuery(ctx, query); err != nil {
 			fmt.Printf("Error processing query: %v\n", err)
 		}
-		fmt.Println("-----------------------------------\n")
+		fmt.Print("-----------------------------------\n\n")
 	}
 }

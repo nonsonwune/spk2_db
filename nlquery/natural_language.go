@@ -93,7 +93,8 @@ func (e *NLQueryEngine) generateSQLQuery(ctx context.Context, query string) (str
 		chat := e.model.StartChat()
 		prompt := e.prompts.BuildQueryPrompt(query)
 		
-		resp, err := chat.SendMessage(ctx, genai.Text(prompt))
+		var resp *genai.GenerateContentResponse
+		resp, err = chat.SendMessage(ctx, genai.Text(prompt))
 		if err == nil && len(resp.Candidates) > 0 {
 			text := resp.Candidates[0].Content.Parts[0]
 			if textStr, ok := text.(genai.Text); ok {
@@ -110,8 +111,14 @@ func (e *NLQueryEngine) generateSQLQuery(ctx context.Context, query string) (str
 		time.Sleep(time.Second)
 	}
 
-	if err != nil || sqlQuery == "" {
+	// Check for errors first
+	if err != nil {
 		return "", fmt.Errorf("failed to generate SQL query: %v", err)
+	}
+
+	// Then check for empty query
+	if sqlQuery == "" {
+		return "", fmt.Errorf("failed to generate SQL query: empty response")
 	}
 
 	return sqlQuery, nil
