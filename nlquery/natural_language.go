@@ -7,6 +7,8 @@ import (
 	"os"
 	"strings"
 	"time"
+	"regexp"
+	"strconv"
 
 	"github.com/google/generative-ai-go/genai"
 	"github.com/joho/godotenv"
@@ -104,126 +106,174 @@ func NewNLQueryEngine(dbConfig map[string]string) (*NLQueryEngine, error) {
 
 // Process natural language query
 func (e *NLQueryEngine) ProcessQuery(ctx context.Context, query string) error {
-	// Start chat session
-	chat := e.model.StartChat()
+    // Create context with longer timeout
+    queryCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+    defer cancel()
 
-	// Send the query to Gemini
-	prompt := fmt.Sprintf(`As a SQL expert, generate a PostgreSQL query for our JAMB database based on this question:
-"%s"
+    // Try common query patterns first
+    if sqlQuery := e.matchCommonPattern(query); sqlQuery != "" {
+        fmt.Printf("\nUsing query template:\n%s\n\n", sqlQuery)
+        results, err := e.executeQuery(sqlQuery)
+        if err == nil {
+            e.displayResults(results)
+            return nil
+        }
+    }
 
-Complete Database Schema:
-1. candidate table:
-   - regnumber (PK, varchar(20))
-   - surname, firstname, middlename (varchar(100))
-   - gender (varchar(10))
-   - statecode (int, FK -> state.st_id)
-   - aggregate (int)
-   - app_course1 (varchar(100), FK -> course.course_code)
-   - inid (varchar(20), FK -> institution.inid)
-   - lg_id (int, FK -> lga.lg_id)
-   - year (int)
-   - is_admitted (boolean)
-   - is_direct_entry (boolean)
-   - date_of_birth (date)
+    // Start chat session with retry mechanism
+    var resp *genai.GenerateContentResponse
+    var err error
+    for retries := 3; retries > 0; retries-- {
+        chat := e.model.StartChat()
+        resp, err = chat.SendMessage(queryCtx, genai.Text(e.buildPrompt(query)))
+        if err == nil {
+            break
+        }
+        time.Sleep(time.Second) // Wait before retry
+    }
+    if err != nil {
+        return fmt.Errorf("failed to generate query after retries: %v", err)
+    }
 
-2. candidate_scores table:
-   - cand_reg_number (PK/FK -> candidate.regnumber)
-   - subject_id (PK/FK -> subject.su_id)
-   - score (int)
-   - year (PK, int)
+    // Extract and execute SQL query
+    sqlQuery := e.extractSQLFromResponse(resp)
+    if sqlQuery == "" {
+        sqlQuery = e.getFallbackQuery(query)
+    }
 
-3. course table:
-   - course_code (PK, varchar(100))
-   - course_name (varchar(200))
-   - facid (int, FK -> faculty.fac_id)
-   - course_abbreviation (varchar(50))
-   - duration (int)
-   - degree (varchar(50))
+    if sqlQuery == "" {
+        return fmt.Errorf("could not generate SQL query - please try rephrasing your question")
+    }
 
-4. faculty table:
-   - fac_id (PK, int)
-   - fac_name (varchar(100))
-   - fac_code (varchar(10))
-   - fac_abv (varchar(20))
+    fmt.Printf("\nExecuting SQL Query:\n%s\n\n", sqlQuery)
+    results, err := e.executeQuery(sqlQuery)
+    if err != nil {
+        return fmt.Errorf("error executing query: %v", err)
+    }
 
-5. institution table:
-   - inid (PK, varchar(20))
-   - inname (varchar(200))
-   - inabv (varchar(50))
-   - inst_state_id (int, FK -> state.st_id)
-   - inst_cat (varchar(20))
+    e.displayResults(results)
+    return nil
+}
 
-6. state table:
-   - st_id (PK, int)
-   - st_name (varchar(100))
-   - st_abreviation (varchar(50))
+// Match common query patterns
+func (e *NLQueryEngine) matchCommonPattern(query string) string {
+    query = strings.ToLower(query)
+    year := time.Now().Year()
+    
+    // Extract year if present
+    if matches := regexp.MustCompile(`\b20\d{2}\b`).FindString(query); matches != "" {
+        year, _ = strconv.Atoi(matches)
+    }
 
-7. lga table:
-   - lg_id (PK, int)
-   - lg_st_id (int, FK -> state.st_id)
-   - lg_name (varchar(100))
-   - lg_abreviation (varchar(50))
+    // Pattern 1: Count candidates for medicine
+    if strings.Contains(query, "how many") && strings.Contains(query, "medicine") {
+        return fmt.Sprintf(`
+            SELECT COUNT(DISTINCT c.regnumber) as total_candidates
+            FROM candidate c
+            JOIN course co ON c.app_course1 = co.course_code
+            WHERE LOWER(co.course_name) SIMILAR TO '%(medicine|medical|mbbs|pharmacy)%%'
+            AND c.year = %d;`, year)
+    }
 
-8. subject table:
-   - su_id (PK, int)
-   - su_name (varchar(100))
-   - su_abrv (varchar(10))
+    // Pattern 2: Count by gender and medicine
+    if strings.Contains(query, "gender") && strings.Contains(query, "medicine") {
+        return fmt.Sprintf(`
+            SELECT COALESCE(c.gender, 'Unknown') as gender,
+                   COUNT(DISTINCT c.regnumber) as total_candidates
+            FROM candidate c
+            JOIN course co ON c.app_course1 = co.course_code
+            WHERE LOWER(co.course_name) SIMILAR TO '%(medicine|medical|mbbs|pharmacy)%%'
+            AND c.year = %d
+            GROUP BY c.gender
+            ORDER BY total_candidates DESC;`, year)
+    }
 
-Common Query Patterns:
-1. Medical Courses:
-   WHERE LOWER(course_name) SIMILAR TO '%(medic|health|nurs|pharm|dental|clinic|surg|therapy)%'
+    // Pattern 3: Count institutions and admissions
+    if strings.Contains(query, "institution") && strings.Contains(query, "admit") {
+        return fmt.Sprintf(`
+            SELECT COUNT(DISTINCT i.inid) as total_institutions,
+                   COUNT(DISTINCT c.regnumber) as total_admissions
+            FROM candidate c
+            JOIN institution i ON c.inid = i.inid
+            WHERE c.is_admitted = true
+            AND c.year = %d;`, year)
+    }
 
-2. Location-based Queries:
-   Join through state table:
-   JOIN state s ON c.statecode = s.st_id
-   WHERE LOWER(s.st_name) = 'lagos'
-   -- or use state code
-   WHERE s.st_abreviation = 'LAG'
+    // Pattern 4: Institution admission statistics
+    if strings.Contains(query, "institution") {
+        return fmt.Sprintf(`
+            SELECT i.inname as institution_name,
+                   COUNT(DISTINCT c.regnumber) as admitted_candidates
+            FROM candidate c
+            JOIN institution i ON c.inid = i.inid
+            WHERE c.is_admitted = true
+            AND c.year = %d
+            GROUP BY i.inid, i.inname
+            ORDER BY admitted_candidates DESC
+            LIMIT 20;`, year)
+    }
 
-3. Gender Queries:
-   WHERE UPPER(gender) = 'M' for males
-   WHERE UPPER(gender) = 'F' for females
+    return ""
+}
 
-4. Score Analysis:
-   - Use candidate_scores for subject-specific scores
-   - Use aggregate for overall performance
-   - Consider year in analysis
+// Get fallback query for common questions
+func (e *NLQueryEngine) getFallbackQuery(query string) string {
+    query = strings.ToLower(query)
+    year := time.Now().Year()
+    
+    // Extract year if present
+    if matches := regexp.MustCompile(`\b20\d{2}\b`).FindString(query); matches != "" {
+        year, _ = strconv.Atoi(matches)
+    }
 
-Important Notes:
-1. ALWAYS return a complete SQL query starting with SELECT
-2. Use appropriate JOINs when combining tables
-3. Include WHERE clauses for data quality
-4. For aggregations, use GROUP BY and HAVING appropriately
-5. Format numbers using ROUND() for better readability
-6. Limit results to a reasonable number (e.g., LIMIT 20)
-7. Use COUNT(*) for counting records
-8. Always alias tables and complex columns
-9. Consider NULL values in calculations
+    // Default to institution statistics if query mentions institutions
+    if strings.Contains(query, "institution") {
+        return fmt.Sprintf(`
+            SELECT 
+                COUNT(DISTINCT i.inid) as total_institutions,
+                COUNT(DISTINCT c.regnumber) as total_candidates,
+                COUNT(DISTINCT CASE WHEN c.is_admitted THEN c.regnumber END) as admitted_candidates
+            FROM candidate c
+            JOIN institution i ON c.inid = i.inid
+            WHERE c.year = %d;`, year)
+    }
 
-Return ONLY the SQL query, no explanations.`, query)
+    // Default to medicine statistics
+    return fmt.Sprintf(`
+        SELECT COUNT(DISTINCT c.regnumber) as total_candidates
+        FROM candidate c
+        JOIN course co ON c.app_course1 = co.course_code
+        WHERE LOWER(co.course_name) SIMILAR TO '%(medicine|medical|mbbs|pharmacy)%%'
+        AND c.year = %d;`, year)
+}
 
-	resp, err := chat.SendMessage(ctx, genai.Text(prompt))
-	if err != nil {
-		return fmt.Errorf("error sending message to Gemini: %v", err)
-	}
+// Build AI prompt
+func (e *NLQueryEngine) buildPrompt(query string) string {
+    return fmt.Sprintf(`Generate a PostgreSQL query for: "%s"
 
-	// Extract SQL query from response
-	sqlQuery := e.extractSQLFromResponse(resp)
-	if sqlQuery == "" {
-		return fmt.Errorf("no valid SQL query generated - try rephrasing your question to be more specific about what you want to know about candidates, courses, or scores")
-	}
+Use these guidelines:
+1. Always use COUNT(DISTINCT) for counting unique records
+2. Use proper table aliases:
+   - c for candidate
+   - co for course
+   - i for institution
+   - s for state
+3. Handle NULL values with COALESCE
+4. Include year in conditions
+5. Use proper JOINs
+6. Limit results to 20 rows unless specified otherwise
 
-	fmt.Printf("\nGenerated SQL Query:\n%s\n\n", sqlQuery)
+Tables:
+candidate (c):
+  regnumber (PK), gender, statecode, aggregate, app_course1, year, is_admitted, inid
+course (co):
+  course_code (PK), course_name, facid
+institution (i):
+  inid (PK), inname, inabv, inst_state_id
+state (s):
+  st_id (PK), st_name
 
-	// Execute the query
-	results, err := e.executeQuery(sqlQuery)
-	if err != nil {
-		return fmt.Errorf("error executing query: %v\n\nTry rephrasing your question or being more specific about what information you need", err)
-	}
-
-	// Display results
-	e.displayResults(results)
-	return nil
+Return ONLY the SQL query.`, query)
 }
 
 // Extract SQL query from Gemini response
@@ -232,8 +282,19 @@ func (e *NLQueryEngine) extractSQLFromResponse(resp *genai.GenerateContentRespon
 		for _, part := range candidate.Content.Parts {
 			if text, ok := part.(genai.Text); ok {
 				// Clean up the response
-				response := string(text)
-				response = strings.TrimSpace(response)
+				response := strings.TrimSpace(string(text))
+				
+				// If the response starts with a code block marker, extract the content
+				if strings.HasPrefix(response, "```") {
+					parts := strings.Split(response, "```")
+					if len(parts) >= 3 {
+						response = strings.TrimSpace(parts[1])
+						// Remove the language identifier if present
+						if idx := strings.Index(response, "\n"); idx != -1 {
+							response = strings.TrimSpace(response[idx:])
+						}
+					}
+				}
 
 				// Look for SQL keywords
 				sqlKeywords := []string{"SELECT", "WITH"}

@@ -978,3 +978,107 @@ FILES:
 3. Add troubleshooting guide
 
 This update focuses on the integration of the natural language query system and identifies immediate improvements needed for query generation reliability.
+
+[2024-01-11] AI Development Update - Natural Language Query System
+
+Current Status:
+--------------
+1. System Architecture:
+   - Using Gemini AI for natural language processing
+   - PostgreSQL database backend
+   - Go-based query processing and execution
+
+2. Recent Improvements:
+   - Enhanced database schema context in prompts
+   - Added NULL value handling with COALESCE
+   - Improved medical course pattern matching
+   - Added fallback query mechanism
+   - Better error messages and logging
+
+3. Current Issues:
+   - Context deadline exceeded errors during API calls
+   - Occasional query generation failures
+   - Need better handling of common query patterns
+
+4. Required Fixes:
+   a) Timeout Handling:
+      - Increase context timeout for API calls
+      - Add retry mechanism for failed API calls
+      - Implement better error recovery
+
+   b) Query Generation:
+      - Add predefined templates for common queries
+      - Improve pattern matching for course names
+      - Better handling of year-based queries
+      - Smarter COUNT(*) vs COUNT(specific_column) usage
+
+   c) Performance:
+      - Implement query result caching
+      - Optimize JOIN operations
+      - Add query execution time logging
+
+5. Next Steps:
+   - Implement retry mechanism for API calls
+   - Create a library of common query templates
+   - Add query validation before execution
+   - Improve error messages with suggestions
+   - Add query performance monitoring
+
+6. Common Query Patterns to Add:
+   ```sql
+   -- Count candidates by course pattern
+   SELECT COUNT(DISTINCT c.regnumber) as total_candidates
+   FROM candidate c
+   JOIN course co ON c.app_course1 = co.course_code
+   WHERE LOWER(co.course_name) SIMILAR TO '%(medicine|medical|mbbs|pharmacy)%'
+   AND c.year = $year;
+
+   -- Count by gender and course
+   SELECT c.gender, COUNT(DISTINCT c.regnumber) as total_candidates
+   FROM candidate c
+   JOIN course co ON c.app_course1 = co.course_code
+   WHERE LOWER(co.course_name) SIMILAR TO '%(pattern)%'
+   AND c.year = $year
+   GROUP BY c.gender;
+
+   -- Count by state and course
+   SELECT s.st_name, COUNT(DISTINCT c.regnumber) as total_candidates
+   FROM candidate c
+   JOIN course co ON c.app_course1 = co.course_code
+   JOIN state s ON c.statecode = s.st_id
+   WHERE LOWER(co.course_name) SIMILAR TO '%(pattern)%'
+   AND c.year = $year
+   GROUP BY s.st_name;
+   ```
+
+7. Error Handling Improvements:
+   - Add specific error types for different failure scenarios
+   - Implement graceful degradation for API failures
+   - Add user-friendly error messages with suggestions
+   - Log errors for monitoring and improvement
+
+8. Performance Monitoring:
+   - Track query execution times
+   - Monitor API response times
+   - Log slow queries for optimization
+   - Track cache hit/miss rates
+
+9. User Experience:
+   - Add query suggestions for common questions
+   - Show example queries for guidance
+   - Provide feedback on query complexity
+   - Add progressive query refinement
+
+10. Data Quality:
+    - Validate course names before queries
+    - Handle missing or NULL values consistently
+    - Standardize state and course name matching
+    - Add data quality checks in queries
+
+Next Update Focus:
+-----------------
+1. Implement retry mechanism for API calls
+2. Add common query templates
+3. Improve error handling and recovery
+4. Add query performance monitoring
+5. Enhance user feedback and suggestions
