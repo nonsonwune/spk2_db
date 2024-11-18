@@ -1082,3 +1082,60 @@ Next Update Focus:
 3. Improve error handling and recovery
 4. Add query performance monitoring
 5. Enhance user feedback and suggestions
+
+[2024-01-11] AI Update: Natural Language Query System Enhancement
+
+Date: [Current Date]
+
+1. Major Changes
+   - Separated prompt management into dedicated module
+   - Enhanced database schema context in prompts
+   - Improved query validation and error handling
+   - Removed rigid templates in favor of LLM-based generation
+
+2. New Components
+   a. Prompt Management System
+      - Created schema_context.go for database structure
+      - Implemented PromptBuilder for dynamic prompts
+      - Added example queries for better context
+   
+   b. Query Processing Pipeline
+      - Added query validation step
+      - Improved error message generation
+      - Enhanced retry mechanism with timeouts
+
+3. Technical Improvements
+   - Better error handling with user-friendly messages
+   - Structured prompt templates for different purposes
+   - Comprehensive database schema context
+   - Query validation before execution
+
+4. Current Capabilities
+   - Dynamic SQL generation based on schema understanding
+   - Validation of generated queries
+   - User-friendly error messages
+   - Complex query support with proper JOIN handling
+
+5. Next Steps
+   - Add more example queries to improve learning
+   - Implement query caching for common patterns
+   - Add support for more complex aggregations
+   - Enhance performance monitoring
+
+6. Known Issues
+   - Need to handle more edge cases in query validation
+   - Some complex queries may need optimization
+   - Error messages could be more specific
+
+7. Performance Considerations
+   - Added timeouts for API calls and query execution
+   - Implemented retry mechanism for API failures
+   - Query validation to prevent expensive operations
+
+8. Development Guidelines
+   - Keep schema context updated with database changes
+   - Add new example queries for common patterns
+   - Maintain clear error messages
+   - Test with various query complexities
+
+This update significantly improves the natural language query system by leveraging Gemini's capabilities more effectively and providing better context about the database structure.
