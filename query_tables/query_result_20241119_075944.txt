@@ -1,0 +1,27 @@
+Query: Show me the top 5 institutions by number of admissions in 2020
+
+Generated SQL Query:
+
+
+		SELECT 
+			co.course_name,
+			COUNT(DISTINCT c.regnumber) as total_applicants,
+			COUNT(DISTINCT CASE WHEN c.is_admitted = true THEN c.regnumber END) as admitted_count,
+			ROUND(100.0 * COUNT(DISTINCT CASE WHEN c.is_admitted = true THEN c.regnumber END)::numeric / 
+				NULLIF(COUNT(DISTINCT c.regnumber), 0), 2) as admission_rate
+		FROM candidate c
+		JOIN course co ON c.app_course1 = co.course_code
+		WHERE LOWER(co.course_name) LIKE '%show me the top 5 institutions by number of admissions in 2020%'
+		AND c.year = 2023
+		GROUP BY co.course_name
+		ORDER BY total_applicants DESC
+		LIMIT 20;
+	
+
+Results Table:
+--------------
+
+course_name  | total_applicants  | admitted_count  | admission_rate  
+-------------+-------------------+-----------------+-----------------
+
+Table Description: Analysis of course applications

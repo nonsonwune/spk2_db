@@ -15,12 +15,14 @@ import (
     "time"
 
     "github.com/fatih/color"
+    "github.com/google/generative-ai-go/genai"
     "github.com/joho/godotenv"
     _ "github.com/lib/pq"
-    "github.com/olekukonko/tablewriter"
-    "github.com/nonsonwune/spk2_db/nlquery"
     "github.com/nonsonwune/spk2_db/importer"
     "github.com/nonsonwune/spk2_db/migrations"
+    "github.com/nonsonwune/spk2_db/nlquery"
+    "github.com/olekukonko/tablewriter"
+    "google.golang.org/api/option"
 )
 
 // Config holds application configuration
@@ -1376,6 +1378,26 @@ func handleCourseImport(ctx context.Context, db *sql.DB) error {
 }
 
 func handleNaturalLanguageQuery(ctx context.Context, db *sql.DB) error {
+    // Verify API key
+    apiKey := os.Getenv("GEMINI_API_KEY")
+    if apiKey == "" {
+        return fmt.Errorf("GEMINI_API_KEY not found in environment variables")
+    }
+
+    // Initialize Gemini client
+    client, err := genai.NewClient(ctx, option.WithAPIKey(apiKey))
+    if err != nil {
+        return fmt.Errorf("failed to create Gemini client: %v", err)
+    }
+    defer client.Close()
+
+    model := client.GenerativeModel("gemini-1.5-flash")
+    temp := float32(0.2)
+    model.Temperature = &temp
+
+    // Initialize NL Query Engine
+    engine := nlquery.NewNLQueryEngine(db, model)
+
     fmt.Println("\nNatural Language Query")
     fmt.Println("=====================")
     fmt.Println("Enter your question (or 'exit' to return to menu):")
@@ -1387,38 +1409,16 @@ func handleNaturalLanguageQuery(ctx context.Context, db *sql.DB) error {
             return nil
         }
 
-        sqlQuery, description, err := nlquery.GenerateSQL(query)
+        // Process the query using the NLQueryEngine
+        fmt.Println("\nProcessing query... (this may take a few seconds)")
+        result, err := engine.ProcessQuery(ctx, query)
         if err != nil {
-            fmt.Printf("Error generating SQL: %v\n", err)
+            fmt.Printf("\nError processing query: %v\n", err)
             continue
         }
 
-        fmt.Printf("\nGenerated SQL Query:\n\n%s\n\n", sqlQuery)
-
-        rows, err := db.Query(sqlQuery)
-        if err != nil {
-            fmt.Printf("Error executing query: %v\n", err)
-            continue
-        }
-        defer rows.Close()
-
-        fmt.Printf("\nProcessing query: %s\n", query)
-        sqlQuery, description, err = nlquery.GenerateSQL(query)
-        if err != nil {
-            fmt.Printf("Error generating SQL: %v\n", err)
-            continue
-        }
-
-        rows, err = db.Query(sqlQuery)
-        if err != nil {
-            fmt.Printf("Error executing query: %v\n", err)
-            continue
-        }
-        defer rows.Close()
-
-        err = nlquery.FormatQueryResult(query, sqlQuery, description, rows)
-        if err != nil {
-            fmt.Printf("Error formatting results: %v\n", err)
-        }
+        fmt.Println("\nResults:")
+        fmt.Println("--------")
+        fmt.Println(result)
     }
 }

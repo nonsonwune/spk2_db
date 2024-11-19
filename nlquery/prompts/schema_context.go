@@ -1,168 +1,57 @@
 package prompts
 
-const SchemaContext = `Database Schema and Course Information:
+const SchemaContext = `Database Schema:
 
-1. Database Statistics:
-   - Named courses: 1,474 (with descriptive names)
-   - Code-only courses: 3,037 (format: course_name = "Course " + course_code)
-   - Total courses: 4,511
+Tables:
+1. candidate
+   - regnumber (PK): Candidate registration number
+   - year: Application year (e.g., 2020, 2021, 2022)
+   - statecode: State code (FK to state.st_id)
+   - app_course1: First choice course code (FK to course.course_code)
+   - is_admitted: Boolean indicating if candidate was admitted (true/false)
+   - inid: Institution ID (FK to institution.inid)
 
-2. Course Code Structure:
-   - All courses have a unique course_code (e.g., "112838K", "12267C")
-   - Some courses have descriptive names (e.g., "MEDICINE & SURGERY")
-   - Others use code-based names where course_name = "Course " + course_code
-   - IMPORTANT: Code-based courses are valid courses, not placeholders
+2. institution
+   - inid (PK): Institution ID
+   - inname: Institution name (e.g., "University of Lagos")
+   - instate: State where institution is located
+   - intype: Type of institution
 
-3. Tables and Their Relationships:
-   - faculty
-     * Primary Key: fac_id (integer)
-     * Columns:
-       - fac_code: Faculty code (varchar(10))
-       - fac_name: Full faculty name (varchar(100))
-       - fac_abv: Faculty abbreviation (varchar(20))
-     * Referenced by:
-       - course.facid -> faculty.fac_id
+3. state
+   - st_id (PK): State ID
+   - st_name: State name (e.g., "LAGOS")
+   - st_code: State code
 
-   - subject
-     * Primary Key: su_id (integer)
-     * Columns:
-       - su_abrv: Subject abbreviation (varchar(10))
-       - su_name: Full subject name (varchar(100))
-     * Referenced by:
-       - candidate_scores.subject_id -> subject.su_id
-       - subject_mapping_2023.su_id -> subject.su_id
-     * Available Subjects:
-       1. Use of English (Core)
-       2. Mathematics (Core)
-       3. Sciences:
-          - Biology
-          - Chemistry
-          - Physics
-          - Computer Studies
-          - Agriculture
-       4. Arts and Humanities:
-          - Literature in English
-          - History
-          - Government
-          - Economics
-          - Geography
-       5. Languages:
-          - Arabic
-          - French
-          - Hausa
-          - Igbo
-          - Yoruba
-       6. Other Subjects:
-          - Art (Fine Art)
-          - Commerce
-          - Home Economics
-          - Islamic Studies
-          - Christian Religious Knowledge
-          - Music
-          - Physical and Health Education
-          - Principles of Accounts
+4. course
+   - course_code (PK): Course code
+   - course_name: Course name
+   - faculty: Faculty name
 
-   - candidate
-     * Primary Key: regnumber
-     * Foreign Keys:
-       - statecode -> state.st_id (candidate's state)
-       - inid -> institution.inid (institution applied to)
-       - lg_id -> lga.lg_id (local government area)
-       - app_course1 -> course.course_code (applied course)
+Common Queries:
+1. Top Institutions by Admissions:
+   SELECT i.inname, COUNT(*) as total_admitted
+   FROM candidate c
+   JOIN institution i ON c.inid = i.inid
+   WHERE c.is_admitted = true AND c.year = 2020
+   GROUP BY i.inname
+   ORDER BY total_admitted DESC
+   LIMIT 5;
 
-   - course
-     * Primary Key: course_code
-     * course_name can be either:
-       - Descriptive name (e.g., "MEDICINE & SURGERY")
-       - Code-based name (e.g., "Course 112838K")
-     * Foreign Keys:
-       - facid -> faculty.fac_id (faculty)
+2. Course Statistics:
+   SELECT c.course_name, COUNT(*) as total_applications
+   FROM candidate ca
+   JOIN course c ON ca.app_course1 = c.course_code
+   WHERE ca.year = 2020
+   GROUP BY c.course_name
+   ORDER BY total_applications DESC;
 
-   - institution_type
-     * Primary Key: intyp_id (integer)
-     * Columns:
-       - intyp_desc: Institution type description (varchar(100))
-       - inst_cat: Institution category (varchar(20))
-     * Referenced by:
-       - institution.intyp -> institution_type.intyp_id
-
-   - institution
-     * Primary Key: inid
-     * Foreign Keys:
-       - inst_state_id -> state.st_id (institution's state)
-       - affiliated_state_id -> state.st_id (affiliated state)
-       - intyp -> institution_type.intyp_id (institution type)
-
-4. Course Categories (Named Courses):
-   A. Medicine and Health Sciences:
-      - Medicine & Surgery
-      - Medical Laboratory Science
-      - Optometry
-      - Pharmacy
-      - Public Health
-      - Veterinary Medicine
-
-   B. Engineering:
-      - Aerospace Engineering
-      - Biomedical Engineering
-      - Chemical Engineering
-      - Civil Engineering
-      - Computer Engineering
-      - Electrical Engineering
-      - Mechanical Engineering
-
-   C. Sciences:
-      - Biochemistry
-      - Biology
-      - Chemistry
-      - Computer Science
-      - Mathematics
-      - Physics
-      - Statistics
-
-   D. Social Sciences:
-      - Economics
-      - Geography
-      - Political Science
-      - Psychology
-      - Sociology
-
-   E. Arts and Humanities:
-      - English Language
-      - History
-      - Islamic Studies
-      - Languages (Arabic, French, Hausa, Yoruba)
-      - Religious Studies
-
-   F. Education:
-      - Adult Education
-      - Guidance & Counselling
-      - Science Education
-      - Special Education
-
-   G. Business and Management:
-      - Accounting
-      - Business Administration
-      - Marketing
-      - Project Management
-
-   H. Agriculture:
-      - Agricultural Economics
-      - Agricultural Engineering
-      - Animal Science
-      - Crop Science
-      - Fisheries
-
-5. Query Best Practices:
-   - Always use COUNT(DISTINCT) for accurate counting
-   - Consider temporal aspects (year field)
-   - Handle NULL values appropriately
-   - Use proper table aliases
-   - Consider performance with large datasets
-   - When searching for specific courses:
-     * Include both named and code-based courses unless specifically filtering
-     * Use course_code for exact matches
-     * Use LIKE on course_name for pattern matching`
+3. State Distribution:
+   SELECT s.st_name, COUNT(*) as total_candidates
+   FROM candidate c
+   JOIN state s ON c.statecode = s.st_id
+   WHERE c.year = 2020
+   GROUP BY s.st_name
+   ORDER BY total_candidates DESC;`
 
 const ExamplePatterns = `Query Pattern Examples:
 
@@ -186,42 +75,84 @@ const ExamplePatterns = `Query Pattern Examples:
 
 5. Engineering Courses:
    - Pattern: LOWER(course_name) LIKE '%engineering%'
-   - Include technology variants: '%engineering technology%'
 
-6. Science Programs:
-   - Include both pure and applied:
-     LOWER(course_name) LIKE ANY(ARRAY['%science%', '%biology%', '%chemistry%', '%physics%'])
-
-7. Language Courses:
-   - Include specific languages:
-     LOWER(course_name) LIKE ANY(ARRAY['%english%', '%french%', '%arabic%', '%hausa%', '%yoruba%'])
-
-8. Business Studies:
-   - Pattern: LOWER(course_name) LIKE ANY(ARRAY['%business%', '%management%', '%accounting%'])
-
-9. Education Programs:
-   - Include variations:
-     LOWER(course_name) LIKE ANY(ARRAY['%education%', '%teaching%', '%pedagogy%'])`
+6. Admission Statistics:
+   - Basic: c.is_admitted = true
+   - With year: c.is_admitted = true AND c.year = 2020
+   - By institution: GROUP BY i.inname ORDER BY COUNT(*) DESC
+   - By state: GROUP BY s.st_name ORDER BY COUNT(*) DESC
 
 const QueryExamples = `Example Queries and Their SQL:
 
-1. "How many female candidates were admitted to medical courses in 2019?"
+1. "Show me the top 5 institutions by number of admissions in 2020"
 SQL:
-SELECT COUNT(DISTINCT c.regnumber)
+SELECT i.inname as institution_name,
+       COUNT(DISTINCT c.regnumber) as total_admitted
 FROM candidate c
-JOIN course co ON c.app_course1 = co.course_code
-WHERE c.gender = 'F'
-AND c.is_admitted = true
-AND c.year = 2019
-AND co.course_name ILIKE '%medicine%';
-
-2. "Show me the top 5 institutions by number of admissions in 2020"
-SQL:
-SELECT i.inname, COUNT(DISTINCT c.regnumber) as admitted_count
-FROM institution i
-JOIN candidate c ON i.inid = c.inid
+JOIN institution i ON c.inid = i.inid
 WHERE c.is_admitted = true
 AND c.year = 2020
 GROUP BY i.inid, i.inname
-ORDER BY admitted_count DESC
-LIMIT 5;`
+ORDER BY total_admitted DESC
+LIMIT 5;
+
+2. "What state had the most medicine applicants?"
+SQL:
+SELECT s.st_name, COUNT(DISTINCT c.regnumber) as applicant_count
+FROM candidate c
+JOIN state s ON c.statecode = s.st_id
+JOIN course co ON c.app_course1 = co.course_code
+WHERE LOWER(co.course_name) LIKE '%medicine%'
+AND c.year = 2023
+GROUP BY s.st_name
+ORDER BY applicant_count DESC
+LIMIT 1;
+
+3. "How many students applied for biochemistry from each state?"
+SQL:
+SELECT 
+    s.st_name,
+    COUNT(DISTINCT c.regnumber) as total_applicants,
+    COUNT(DISTINCT CASE WHEN c.is_admitted = true THEN c.regnumber END) as admitted_count,
+    ROUND(100.0 * COUNT(DISTINCT CASE WHEN c.is_admitted = true THEN c.regnumber END) / 
+        NULLIF(COUNT(DISTINCT c.regnumber), 0), 2) as admission_rate
+FROM candidate c
+JOIN state s ON c.statecode = s.st_id
+JOIN course co ON c.app_course1 = co.course_code
+WHERE LOWER(co.course_name) LIKE '%biochemistry%'
+AND c.year = 2023
+GROUP BY s.st_name
+ORDER BY total_applicants DESC;
+
+4. "Which region has the highest number of engineering applicants?"
+SQL:
+WITH RegionalStats AS (
+    SELECT 
+        CASE 
+            WHEN s.st_name IN ('BENUE', 'FCT', 'KOGI', 'KWARA', 'NASARAWA', 'NIGER', 'PLATEAU') THEN 'North Central'
+            WHEN s.st_name IN ('ADAMAWA', 'BAUCHI', 'BORNO', 'GOMBE', 'TARABA', 'YOBE') THEN 'North East'
+            WHEN s.st_name IN ('JIGAWA', 'KADUNA', 'KANO', 'KATSINA', 'KEBBI', 'SOKOTO', 'ZAMFARA') THEN 'North West'
+            WHEN s.st_name IN ('ABIA', 'ANAMBRA', 'EBONYI', 'ENUGU', 'IMO') THEN 'South East'
+            WHEN s.st_name IN ('AKWA IBOM', 'BAYELSA', 'CROSS RIVER', 'DELTA', 'EDO', 'RIVERS') THEN 'South South'
+            WHEN s.st_name IN ('EKITI', 'LAGOS', 'OGUN', 'ONDO', 'OSUN', 'OYO') THEN 'South West'
+        END as region,
+        COUNT(DISTINCT c.regnumber) as total_applicants
+    FROM candidate c
+    JOIN state s ON c.statecode = s.st_id
+    JOIN course co ON c.app_course1 = co.course_code
+    WHERE LOWER(co.course_name) LIKE '%engineering%'
+    AND c.year = 2023
+    GROUP BY 
+        CASE 
+            WHEN s.st_name IN ('BENUE', 'FCT', 'KOGI', 'KWARA', 'NASARAWA', 'NIGER', 'PLATEAU') THEN 'North Central'
+            WHEN s.st_name IN ('ADAMAWA', 'BAUCHI', 'BORNO', 'GOMBE', 'TARABA', 'YOBE') THEN 'North East'
+            WHEN s.st_name IN ('JIGAWA', 'KADUNA', 'KANO', 'KATSINA', 'KEBBI', 'SOKOTO', 'ZAMFARA') THEN 'North West'
+            WHEN s.st_name IN ('ABIA', 'ANAMBRA', 'EBONYI', 'ENUGU', 'IMO') THEN 'South East'
+            WHEN s.st_name IN ('AKWA IBOM', 'BAYELSA', 'CROSS RIVER', 'DELTA', 'EDO', 'RIVERS') THEN 'South South'
+            WHEN s.st_name IN ('EKITI', 'LAGOS', 'OGUN', 'ONDO', 'OSUN', 'OYO') THEN 'South West'
+        END
+)
+SELECT region, total_applicants
+FROM RegionalStats
+ORDER BY total_applicants DESC
+LIMIT 1;`

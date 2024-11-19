@@ -2,8 +2,6 @@ package prompts
 
 import (
 	"fmt"
-	"path/filepath"
-	"runtime"
 	"strings"
 )
 
@@ -106,98 +104,53 @@ func (a *SchemaAgent) Process(query string) (string, error) {
 }
 
 // PromptBuilder handles the construction of prompts for the LLM
-type PromptBuilder struct {
-	baseContext    string
-	examples       string
-	courseMatcher  *CourseNameMatcher
-	intentAgent    *IntentAgent
-	schemaAgent    *SchemaAgent
-}
+type PromptBuilder struct{}
 
-// NewPromptBuilder creates a new PromptBuilder with schema context
 func NewPromptBuilder() *PromptBuilder {
-	// Get the current file's directory
-	_, filename, _, _ := runtime.Caller(0)
-	dir := filepath.Dir(filename)
-	
-	matcher := NewCourseNameMatcher()
-	err := matcher.LoadCourseNames(filepath.Join(dir, "course_names.txt"))
-	if err != nil {
-		fmt.Printf("Warning: Failed to load course names: %v\n", err)
-	}
-
-	return &PromptBuilder{
-		baseContext:    SchemaContext,
-		examples:       QueryExamples,
-		courseMatcher:  matcher,
-		intentAgent:    &IntentAgent{},
-		schemaAgent:    &SchemaAgent{},
-	}
+	return &PromptBuilder{}
 }
 
-// BuildQueryPrompt creates a prompt for SQL query generation
 func (pb *PromptBuilder) BuildQueryPrompt(query string) string {
-	// Process query through agents
-	intent, _ := pb.intentAgent.Process(query)
-	schema, _ := pb.schemaAgent.Process(query)
-	
-	return fmt.Sprintf(`
-Given the following database schema:
+	return fmt.Sprintf(`You are a SQL query generator for a JAMB (Joint Admissions and Matriculation Board) database.
+
 %s
 
-And the query intent: %s
-With schema mapping: %s
+%s
 
-Generate a SQL query that:
-1. Correctly joins necessary tables
-2. Uses proper column names from the schema
-3. Handles aggregations and grouping appropriately
-4. Includes appropriate indexes and constraints
-5. Considers performance implications
+Given this context, generate a SQL query for this question:
+%s
 
-User Query: %s
-`, pb.baseContext, intent, schema, query)
+Return only the SQL query without any explanation or markdown formatting.`, SchemaContext, QueryExamples, query)
 }
 
-// BuildValidationPrompt creates a prompt for validating generated SQL
-func (pb *PromptBuilder) BuildValidationPrompt(query, sql string) string {
-	return fmt.Sprintf(`You are a SQL query validator. Your task is to validate if the generated SQL query correctly answers the user's question.
+func (pb *PromptBuilder) BuildErrorPrompt(query string, err error) string {
+	return fmt.Sprintf(`Given this failed query attempt:
+Query: %s
+Error: %s
 
-User Query: %s
+Explain in simple terms what went wrong and how the user can modify their question to get better results.
+Be specific about what terms or filters they could add to make the query more precise.`, query, err)
+}
 
+func (pb *PromptBuilder) BuildValidationPrompt(query string, sql string) string {
+	return fmt.Sprintf(`Validate this SQL query for the JAMB database:
+Original Question: %s
 Generated SQL:
 %s
 
-Please validate:
-1. Table joins are correct and necessary
-2. Column names match the schema
-3. WHERE conditions are appropriate
-4. GROUP BY and ORDER BY are logical
-5. Performance considerations are addressed
+Check for:
+1. SQL syntax errors
+2. Missing or incorrect table joins
+3. Appropriate filtering conditions
+4. Proper grouping and ordering
+5. Reasonable result limits
 
-Provide feedback on:
-1. Correctness
-2. Performance
-3. Suggested improvements`, query, sql)
+Respond with either:
+"VALID" if the query looks correct
+or
+"INVALID: [reason]" if there are issues`, query, sql)
 }
 
-// BuildErrorPrompt creates a prompt for generating user-friendly error messages
-func (pb *PromptBuilder) BuildErrorPrompt(query string, err error) string {
-	return fmt.Sprintf(`Generate a user-friendly error message for this failed query:
-
-Question: "%s"
-
-Error: %v
-
-Requirements:
-1. Explain the issue in simple terms
-2. Suggest how to rephrase the question
-3. Keep the message concise and helpful
-
-Error Message:`, query, err)
-}
-
-// ExtractYear attempts to extract year from the query
 func (pb *PromptBuilder) ExtractYear(query string) string {
 	return fmt.Sprintf(`Extract the year from this query: "%s"
 

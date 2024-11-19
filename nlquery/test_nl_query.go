@@ -2,58 +2,95 @@ package nlquery
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"log"
 	"os"
-	"time"
+	"testing"
 
+	"github.com/google/generative-ai-go/genai"
 	"github.com/joho/godotenv"
-	_ "github.com/lib/pq"
+	"google.golang.org/api/option"
 )
 
-func RunTests() {
-	// Load environment variables
-	if err := godotenv.Load(); err != nil {
-		log.Fatal("Error loading .env file")
+func TestMain(m *testing.M) {
+	if err := godotenv.Load("../.env"); err != nil {
+		log.Fatalf("Error loading .env file: %v", err)
 	}
+	os.Exit(m.Run())
+}
 
-	// Initialize database configuration
-	dbConfig := map[string]string{
-		"host":     os.Getenv("DB_HOST"),
-		"port":     os.Getenv("DB_PORT"),
-		"user":     os.Getenv("DB_USER"),
-		"password": os.Getenv("DB_PASSWORD"),
-		"dbname":   os.Getenv("DB_NAME"),
-	}
+func setupTestDB(t *testing.T) *sql.DB {
+	connStr := fmt.Sprintf("host=%s user=%s password=%s dbname=%s sslmode=disable",
+		os.Getenv("DB_HOST"),
+		os.Getenv("DB_USER"),
+		os.Getenv("DB_PASSWORD"),
+		os.Getenv("DB_NAME"))
 
-	// Initialize NL Query Engine
-	engine, err := NewNLQueryEngine(dbConfig)
+	db, err := sql.Open("postgres", connStr)
 	if err != nil {
-		log.Fatalf("Error initializing NL Query Engine: %v", err)
-	}
-	defer engine.Close()
-
-	fmt.Println("Testing Natural Language Queries...")
-	fmt.Print("===================================\n\n")
-
-	// Test queries
-	queries := []string{
-		"What is the average score of candidates from each state?",
-		"Show me the top 10 performing candidates",
-		"How many candidates applied for medicine related courses?",
-		"What is the gender distribution of candidates?",
+		t.Fatalf("Failed to connect to database: %v", err)
 	}
 
-	// Process each query
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	return db
+}
 
-	for _, query := range queries {
-		fmt.Printf("Query: %s\n", query)
-		fmt.Println("-----------------------------------")
-		if err := engine.ProcessQuery(ctx, query); err != nil {
-			fmt.Printf("Error processing query: %v\n", err)
-		}
-		fmt.Print("-----------------------------------\n\n")
+func setupGeminiClient(t *testing.T) *genai.GenerativeModel {
+	ctx := context.Background()
+	client, err := genai.NewClient(ctx, option.WithAPIKey(os.Getenv("GEMINI_API_KEY")))
+	if err != nil {
+		t.Fatalf("Failed to create Gemini client: %v", err)
+	}
+
+	model := client.GenerativeModel("gemini-1.5-flash")
+	temp := float32(0.2)
+	model.Temperature = &temp
+
+	return model
+}
+
+func TestNLQueryEngine(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	model := setupGeminiClient(t)
+
+	engine := NewNLQueryEngine(db, model)
+
+	testCases := []struct {
+		name    string
+		query   string
+		wantErr bool
+	}{
+		{
+			name:    "Basic state query",
+			query:   "How many students applied from Lagos state?",
+			wantErr: false,
+		},
+		{
+			name:    "Course specific query",
+			query:   "Show me the top 5 courses by number of applicants",
+			wantErr: false,
+		},
+		{
+			name:    "Invalid query",
+			query:   "What is the meaning of life?",
+			wantErr: true,
+		},
+	}
+
+	ctx := context.Background()
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := engine.ProcessQuery(ctx, tc.query)
+			if (err != nil) != tc.wantErr {
+				t.Errorf("ProcessQuery() error = %v, wantErr %v", err, tc.wantErr)
+				return
+			}
+			if !tc.wantErr && result == "" {
+				t.Error("ProcessQuery() returned empty result for valid query")
+			}
+			t.Logf("Result: %s", result)
+		})
 	}
 }

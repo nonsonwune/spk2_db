@@ -4,341 +4,185 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
 	"github.com/google/generative-ai-go/genai"
-	"github.com/joho/godotenv"
-	"github.com/olekukonko/tablewriter"
-	"google.golang.org/api/option"
-
 	"github.com/nonsonwune/spk2_db/nlquery/prompts"
 )
 
 type NLQueryEngine struct {
-	client  *genai.Client
-	model   *genai.GenerativeModel
-	db      *sql.DB
-	prompts *prompts.PromptBuilder
+	db            *sql.DB
+	model         *genai.GenerativeModel
+	promptBuilder *prompts.PromptBuilder
 }
 
-// Initialize NLQueryEngine with database and Gemini API client
-func NewNLQueryEngine(dbConfig map[string]string) (*NLQueryEngine, error) {
-	if err := godotenv.Load(); err != nil {
-		return nil, fmt.Errorf("error loading .env file: %v", err)
-	}
-
-	connStr := fmt.Sprintf("host=%s user=%s password=%s dbname=%s sslmode=disable",
-		dbConfig["host"], dbConfig["user"], dbConfig["password"], dbConfig["dbname"])
-	db, err := sql.Open("postgres", connStr)
-	if err != nil {
-		return nil, fmt.Errorf("error connecting to database: %v", err)
-	}
-
-	ctx := context.Background()
-	client, err := genai.NewClient(ctx, option.WithAPIKey(os.Getenv("GEMINI_API_KEY")))
-	if err != nil {
-		return nil, fmt.Errorf("error initializing Gemini client: %v", err)
-	}
-
-	// Use the recommended model version
-	model := client.GenerativeModel("gemini-1.5-flash")
-	
-	// Configure model parameters
-	temp := float32(0.2) // Lower temperature for more precise SQL
-	model.Temperature = &temp
-	
-	// Set safety settings as recommended
-	model.SafetySettings = []*genai.SafetySetting{
-		{
-			Category:  genai.HarmCategoryHarassment,
-			Threshold: genai.HarmBlockNone,
-		},
-		{
-			Category:  genai.HarmCategoryHateSpeech,
-			Threshold: genai.HarmBlockNone,
-		},
-	}
-
+func NewNLQueryEngine(db *sql.DB, model *genai.GenerativeModel) *NLQueryEngine {
 	return &NLQueryEngine{
-		client:  client,
-		model:   model,
-		db:      db,
-		prompts: prompts.NewPromptBuilder(),
-	}, nil
+		db:            db,
+		model:         model,
+		promptBuilder: prompts.NewPromptBuilder(),
+	}
 }
 
-// Process natural language query
-func (e *NLQueryEngine) ProcessQuery(ctx context.Context, query string) error {
-	queryCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
+func (e *NLQueryEngine) ProcessQuery(ctx context.Context, query string) (string, error) {
+	// Create a context with timeout
+	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
 
-	// Generate SQL query using Gemini
-	sqlQuery, err := e.generateSQLQuery(queryCtx, query)
+	// Generate SQL query
+	prompt := e.promptBuilder.BuildQueryPrompt(query)
+	resp, err := e.model.GenerateContent(ctx, genai.Text(prompt))
 	if err != nil {
-		if strings.Contains(err.Error(), "context deadline exceeded") {
-			return fmt.Errorf("The query timed out. Try a more specific question or add more filters (e.g., year, state, course)")
-		}
-		errMsg, _ := e.getErrorMessage(queryCtx, query, err)
-		return fmt.Errorf(errMsg)
+		return "", fmt.Errorf("failed to generate SQL: %v", err)
 	}
 
-	// Validate the generated query
-	if valid, reason := e.validateQuery(queryCtx, query, sqlQuery); !valid {
-		return fmt.Errorf("invalid query: %s", reason)
+	if len(resp.Candidates) == 0 || len(resp.Candidates[0].Content.Parts) == 0 {
+		return "", fmt.Errorf("no response generated")
 	}
 
-	fmt.Printf("\nExecuting SQL Query:\n%s\n\n", sqlQuery)
-	results, err := e.executeQuery(sqlQuery)
+	sql := ""
+	if textPart, ok := resp.Candidates[0].Content.Parts[0].(genai.Text); ok {
+		sql = string(textPart)
+	} else {
+		return "", fmt.Errorf("unexpected response type")
+	}
+	sql = strings.TrimSpace(sql)
+
+	// Validate the generated SQL
+	validationPrompt := e.promptBuilder.BuildValidationPrompt(query, sql)
+	validationResp, err := e.model.GenerateContent(ctx, genai.Text(validationPrompt))
 	if err != nil {
-		errMsg, _ := e.getErrorMessage(queryCtx, query, err)
-		return fmt.Errorf(errMsg)
+		return "", fmt.Errorf("failed to validate SQL: %v", err)
 	}
 
-	e.displayResults(results)
-	return nil
-}
-
-func (e *NLQueryEngine) generateSQLQuery(ctx context.Context, query string) (string, error) {
-	var sqlQuery string
-	var lastErr error
-
-	// Implement exponential backoff for retries
-	backoff := []time.Duration{
-		1 * time.Second,
-		2 * time.Second,
-		4 * time.Second,
+	if len(validationResp.Candidates) == 0 || len(validationResp.Candidates[0].Content.Parts) == 0 {
+		return "", fmt.Errorf("no validation response generated")
 	}
 
-	for i, wait := range backoff {
-		select {
-		case <-ctx.Done():
-			return "", ctx.Err()
-		default:
-			chat := e.model.StartChat()
-			prompt := e.prompts.BuildQueryPrompt(query)
-			
-			resp, err := chat.SendMessage(ctx, genai.Text(prompt))
-			if err != nil {
-				lastErr = err
-				if isRateLimitError(err) {
-					time.Sleep(wait)
-					continue
-				}
-				// For other errors, log and retry
-				fmt.Printf("Attempt %d failed: %v\n", i+1, err)
-				time.Sleep(wait)
-				continue
-			}
-
-			if len(resp.Candidates) == 0 {
-				lastErr = fmt.Errorf("no response candidates")
-				time.Sleep(wait)
-				continue
-			}
-
-			// Extract and clean SQL from response
-			sqlQuery, err = extractSQLFromResponse(resp.Candidates[0].Content.Parts[0])
-			if err != nil {
-				lastErr = err
-				time.Sleep(wait)
-				continue
-			}
-
-			return sqlQuery, nil
-		}
+	validation := ""
+	if textPart, ok := validationResp.Candidates[0].Content.Parts[0].(genai.Text); ok {
+		validation = string(textPart)
+	} else {
+		return "", fmt.Errorf("unexpected validation response type")
 	}
 
-	if lastErr != nil {
-		return "", fmt.Errorf("all attempts failed, last error: %v", lastErr)
-	}
-	return "", fmt.Errorf("failed to generate SQL query after all attempts")
-}
-
-// Helper function to check for rate limit errors
-func isRateLimitError(err error) bool {
-	return strings.Contains(strings.ToLower(err.Error()), "rate limit") ||
-		strings.Contains(strings.ToLower(err.Error()), "quota exceeded")
-}
-
-// Helper function to extract SQL from response
-func extractSQLFromResponse(content interface{}) (string, error) {
-	text, ok := content.(genai.Text)
-	if !ok {
-		return "", fmt.Errorf("unexpected response type: %T", content)
+	if !strings.HasPrefix(validation, "VALID") {
+		return "", fmt.Errorf("invalid SQL generated: %s", validation)
 	}
 
-	sqlQuery := string(text)
-	sqlQuery = strings.TrimSpace(sqlQuery)
-
-	// Handle different SQL code block formats
-	formats := []string{"```sql", "```SQL", "```postgresql"}
-	for _, format := range formats {
-		if strings.HasPrefix(sqlQuery, format) {
-			sqlQuery = strings.TrimPrefix(sqlQuery, format)
-			if idx := strings.LastIndex(sqlQuery, "```"); idx != -1 {
-				sqlQuery = sqlQuery[:idx]
-			}
-			break
-		}
-	}
-
-	sqlQuery = strings.TrimSpace(sqlQuery)
-	if sqlQuery == "" {
-		return "", fmt.Errorf("empty SQL query after extraction")
-	}
-
-	return sqlQuery, nil
-}
-
-func (e *NLQueryEngine) validateQuery(ctx context.Context, query, sql string) (bool, string) {
-	chat := e.model.StartChat()
-	prompt := e.prompts.BuildValidationPrompt(query, sql)
-	
-	resp, err := chat.SendMessage(ctx, genai.Text(prompt))
-	if err != nil || len(resp.Candidates) == 0 {
-		return false, "validation failed due to API error"
-	}
-
-	text := resp.Candidates[0].Content.Parts[0]
-	if textStr, ok := text.(genai.Text); ok {
-		result := strings.TrimSpace(string(textStr))
-		if strings.HasPrefix(result, "VALID") {
-			return true, ""
-		}
-		if strings.HasPrefix(result, "INVALID: ") {
-			return false, strings.TrimPrefix(result, "INVALID: ")
-		}
-		return false, fmt.Sprintf("validation failed: %s", result)
-	}
-	return false, "invalid response format from validation"
-}
-
-func (e *NLQueryEngine) getErrorMessage(ctx context.Context, query string, err error) (string, error) {
-	chat := e.model.StartChat()
-	prompt := e.prompts.BuildErrorPrompt(query, err)
-	
-	resp, err := chat.SendMessage(ctx, genai.Text(prompt))
-	if err != nil || len(resp.Candidates) == 0 {
-		return "An error occurred while processing your query", nil
-	}
-
-	text := resp.Candidates[0].Content.Parts[0]
-	if textStr, ok := text.(genai.Text); ok {
-		return strings.TrimSpace(string(textStr)), nil
-	}
-	return "An error occurred while processing your query", nil
-}
-
-// Execute SQL query and return results
-func (e *NLQueryEngine) executeQuery(query string) ([]map[string]interface{}, error) {
-	// Increase timeout to 30 seconds for large queries
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	// Add query optimization hints for COUNT queries
-	if strings.Contains(strings.ToUpper(query), "COUNT(") {
-		// Use EXPLAIN to check if we need table scan
-		explain := "EXPLAIN " + query
-		row := e.db.QueryRowContext(ctx, explain)
-		var plan string
-		if err := row.Scan(&plan); err == nil {
-			if strings.Contains(strings.ToLower(plan), "seq scan") {
-				// Add PARALLEL hint for large table scans
-				query = strings.Replace(query, "SELECT", "SELECT /*+ PARALLEL(4) */", 1)
-			}
-		}
-	}
-
-	rows, err := e.db.QueryContext(ctx, query)
+	// Execute the SQL query
+	rows, err := e.db.QueryContext(ctx, sql)
 	if err != nil {
-		return nil, err
+		// Generate user-friendly error message
+		errorPrompt := e.promptBuilder.BuildErrorPrompt(query, err)
+		errorResp, genErr := e.model.GenerateContent(ctx, genai.Text(errorPrompt))
+		if genErr != nil {
+			return "", fmt.Errorf("query failed: %v", err)
+		}
+		if len(errorResp.Candidates) > 0 && len(errorResp.Candidates[0].Content.Parts) > 0 {
+			if textPart, ok := errorResp.Candidates[0].Content.Parts[0].(genai.Text); ok {
+				return "", fmt.Errorf(string(textPart))
+			}
+		}
+		return "", fmt.Errorf("query failed: %v", err)
 	}
 	defer rows.Close()
 
-	columns, err := rows.Columns()
+	// Format results
+	results, err := formatResults(rows)
 	if err != nil {
-		return nil, err
-	}
-
-	var results []map[string]interface{}
-	for rows.Next() {
-		result := make(map[string]interface{})
-		values := make([]interface{}, len(columns))
-		pointers := make([]interface{}, len(columns))
-		for i := range values {
-			pointers[i] = &values[i]
-		}
-
-		if err := rows.Scan(pointers...); err != nil {
-			return nil, err
-		}
-
-		for i, column := range columns {
-			val := values[i]
-			if b, ok := val.([]byte); ok {
-				result[column] = string(b)
-			} else {
-				result[column] = val
-			}
-		}
-		results = append(results, result)
+		return "", fmt.Errorf("failed to format results: %v", err)
 	}
 
 	return results, nil
 }
 
-// Display results in a table format
-func (e *NLQueryEngine) displayResults(results []map[string]interface{}) {
-	if len(results) == 0 {
-		fmt.Println("No results found")
-		return
-	}
+func formatResults(rows *sql.Rows) (string, error) {
+    // Get column names
+    columns, err := rows.Columns()
+    if err != nil {
+        return "", fmt.Errorf("failed to get column names: %v", err)
+    }
 
-	// Get columns from the first result
-	var columns []string
-	for column := range results[0] {
-		columns = append(columns, column)
-	}
+    // Prepare values holder
+    values := make([]interface{}, len(columns))
+    valuePtrs := make([]interface{}, len(columns))
+    for i := range columns {
+        valuePtrs[i] = &values[i]
+    }
 
-	// Create table
-	table := tablewriter.NewWriter(os.Stdout)
-	table.SetHeader(columns)
-	table.SetAutoFormatHeaders(true)
-	table.SetHeaderAlignment(tablewriter.ALIGN_LEFT)
-	table.SetAlignment(tablewriter.ALIGN_LEFT)
-	table.SetCenterSeparator("")
-	table.SetColumnSeparator("")
-	table.SetRowSeparator("")
-	table.SetHeaderLine(false)
-	table.SetBorder(false)
-	table.SetTablePadding("\t")
-	table.SetNoWhiteSpace(true)
+    // Build result string
+    var result strings.Builder
+    
+    // Write header
+    maxWidths := make([]int, len(columns))
+    for i, col := range columns {
+        if i > 0 {
+            result.WriteString("\t")
+        }
+        result.WriteString(col)
+        maxWidths[i] = len(col)
+    }
+    result.WriteString("\n")
+    
+    // Write separator
+    for i := range columns {
+        if i > 0 {
+            result.WriteString("\t")
+        }
+        result.WriteString(strings.Repeat("-", maxWidths[i]))
+    }
+    result.WriteString("\n")
 
-	// Add rows
-	for _, result := range results {
-		var row []string
-		for _, column := range columns {
-			value := result[column]
-			if value == nil {
-				row = append(row, "NULL")
-			} else {
-				row = append(row, fmt.Sprintf("%v", value))
-			}
-		}
-		table.Append(row)
-	}
+    // Collect all rows first to calculate column widths
+    var allRows [][]string
+    for rows.Next() {
+        err = rows.Scan(valuePtrs...)
+        if err != nil {
+            return "", fmt.Errorf("failed to scan row: %v", err)
+        }
 
-	table.Render()
-}
+        // Convert row to strings
+        rowStrings := make([]string, len(columns))
+        for i, val := range values {
+            if val == nil {
+                rowStrings[i] = "NULL"
+            } else {
+                switch v := val.(type) {
+                case []byte:
+                    rowStrings[i] = string(v)
+                default:
+                    rowStrings[i] = fmt.Sprintf("%v", v)
+                }
+            }
+            if len(rowStrings[i]) > maxWidths[i] {
+                maxWidths[i] = len(rowStrings[i])
+            }
+        }
+        allRows = append(allRows, rowStrings)
+    }
 
-// Close resources
-func (e *NLQueryEngine) Close() {
-	if e.db != nil {
-		e.db.Close()
-	}
-	if e.client != nil {
-		e.client.Close()
-	}
+    if err = rows.Err(); err != nil {
+        return "", fmt.Errorf("error iterating rows: %v", err)
+    }
+
+    // Write rows with proper padding
+    for _, rowStrings := range allRows {
+        for i, val := range rowStrings {
+            if i > 0 {
+                result.WriteString("\t")
+            }
+            result.WriteString(val)
+        }
+        result.WriteString("\n")
+    }
+
+    if len(allRows) == 0 {
+        result.WriteString("No results found\n")
+    } else {
+        result.WriteString(fmt.Sprintf("\nTotal rows: %d\n", len(allRows)))
+    }
+
+    return result.String(), nil
 }
