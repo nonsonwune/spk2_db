@@ -8,6 +8,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/google/generative-ai-go/genai"
 	"github.com/joho/godotenv"
 	"google.golang.org/api/option"
@@ -49,19 +50,33 @@ func setupGeminiClient(t *testing.T) *genai.GenerativeModel {
 	return model
 }
 
-func TestNLQueryEngine(t *testing.T) {
-	db := setupTestDB(t)
+func TestNLQueryEngine_ProcessQuery(t *testing.T) {
+	// Create a mock database connection
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("Error creating mock database: %v", err)
+	}
 	defer db.Close()
 
-	model := setupGeminiClient(t)
+	// Set up mock expectations
+	mock.ExpectQuery("SELECT").WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(42))
 
-	engine := NewNLQueryEngine(db, model)
+	// Create the NL query engine
+	engine, err := NewNLQueryEngine(db)
+	if err != nil {
+		t.Fatalf("Error creating NL query engine: %v", err)
+	}
 
 	testCases := []struct {
 		name    string
 		query   string
 		wantErr bool
 	}{
+		{
+			name:    "Simple count query",
+			query:   "How many students are there?",
+			wantErr: false,
+		},
 		{
 			name:    "Basic state query",
 			query:   "How many students applied from Lagos state?",
@@ -79,18 +94,21 @@ func TestNLQueryEngine(t *testing.T) {
 		},
 	}
 
-	ctx := context.Background()
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			result, err := engine.ProcessQuery(ctx, tc.query)
+			result, err := engine.ProcessQuery(tc.query)
 			if (err != nil) != tc.wantErr {
 				t.Errorf("ProcessQuery() error = %v, wantErr %v", err, tc.wantErr)
 				return
 			}
 			if !tc.wantErr && result == "" {
-				t.Error("ProcessQuery() returned empty result for valid query")
+				t.Error("ProcessQuery() returned empty result")
 			}
-			t.Logf("Result: %s", result)
 		})
+	}
+
+	// Ensure all expectations were met
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("there were unfulfilled expectations: %s", err)
 	}
 }

@@ -3,99 +3,222 @@ package nlquery
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/google/generative-ai-go/genai"
 	"github.com/nonsonwune/spk2_db/nlquery/prompts"
+	"google.golang.org/api/option"
 )
 
 type NLQueryEngine struct {
-	db            *sql.DB
+	client        *genai.Client
 	model         *genai.GenerativeModel
+	db            *sql.DB
 	promptBuilder *prompts.PromptBuilder
+	keyManager    *KeyManager
 }
 
-func NewNLQueryEngine(db *sql.DB, model *genai.GenerativeModel) *NLQueryEngine {
+type QueryResult struct {
+	ThoughtProcess string
+	SQLQuery      string
+	Explanation   string
+	Results       string
+}
+
+func NewNLQueryEngine(db *sql.DB) (*NLQueryEngine, error) {
+	keyManager := NewKeyManager()
+	if len(keyManager.keys) == 0 {
+		return nil, fmt.Errorf("no API keys available")
+	}
+
+	client, err := genai.NewClient(context.Background(), option.WithAPIKey(keyManager.GetNextKey()))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Gemini client: %v", err)
+	}
+
+	model := client.GenerativeModel("gemini-1.5-flash")
+	model.SetTemperature(0.2)
+
 	return &NLQueryEngine{
-		db:            db,
+		client:        client,
 		model:         model,
+		db:            db,
 		promptBuilder: prompts.NewPromptBuilder(),
-	}
+		keyManager:    keyManager,
+	}, nil
 }
 
-func (e *NLQueryEngine) ProcessQuery(ctx context.Context, query string) (string, error) {
-	// Create a context with timeout
-	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
-	defer cancel()
+func (e *NLQueryEngine) generateWithRetry(ctx context.Context, prompt string) (string, error) {
+	var lastErr error
+	maxRetries := 3
+	baseDelay := 2 * time.Second
 
-	// Generate SQL query
-	prompt := e.promptBuilder.BuildQueryPrompt(query)
-	resp, err := e.model.GenerateContent(ctx, genai.Text(prompt))
-	if err != nil {
-		return "", fmt.Errorf("failed to generate SQL: %v", err)
-	}
-
-	if len(resp.Candidates) == 0 || len(resp.Candidates[0].Content.Parts) == 0 {
-		return "", fmt.Errorf("no response generated")
-	}
-
-	sql := ""
-	if textPart, ok := resp.Candidates[0].Content.Parts[0].(genai.Text); ok {
-		sql = string(textPart)
-	} else {
-		return "", fmt.Errorf("unexpected response type")
-	}
-	sql = strings.TrimSpace(sql)
-
-	// Validate the generated SQL
-	validationPrompt := e.promptBuilder.BuildValidationPrompt(query, sql)
-	validationResp, err := e.model.GenerateContent(ctx, genai.Text(validationPrompt))
-	if err != nil {
-		return "", fmt.Errorf("failed to validate SQL: %v", err)
-	}
-
-	if len(validationResp.Candidates) == 0 || len(validationResp.Candidates[0].Content.Parts) == 0 {
-		return "", fmt.Errorf("no validation response generated")
-	}
-
-	validation := ""
-	if textPart, ok := validationResp.Candidates[0].Content.Parts[0].(genai.Text); ok {
-		validation = string(textPart)
-	} else {
-		return "", fmt.Errorf("unexpected validation response type")
-	}
-
-	if !strings.HasPrefix(validation, "VALID") {
-		return "", fmt.Errorf("invalid SQL generated: %s", validation)
-	}
-
-	// Execute the SQL query
-	rows, err := e.db.QueryContext(ctx, sql)
-	if err != nil {
-		// Generate user-friendly error message
-		errorPrompt := e.promptBuilder.BuildErrorPrompt(query, err)
-		errorResp, genErr := e.model.GenerateContent(ctx, genai.Text(errorPrompt))
-		if genErr != nil {
-			return "", fmt.Errorf("query failed: %v", err)
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		if attempt > 1 {
+			fmt.Printf("\nRetrying API call (attempt %d/%d)...\n", attempt, maxRetries)
+			
+			// Get a new API key for the retry
+			key := e.keyManager.GetNextKey()
+			client, err := genai.NewClient(ctx, option.WithAPIKey(key))
+			if err != nil {
+				continue
+			}
+			e.client = client
+			e.model = client.GenerativeModel("gemini-1.5-flash")
+			e.model.SetTemperature(0.2)
 		}
-		if len(errorResp.Candidates) > 0 && len(errorResp.Candidates[0].Content.Parts) > 0 {
-			if textPart, ok := errorResp.Candidates[0].Content.Parts[0].(genai.Text); ok {
-				return "", fmt.Errorf(string(textPart))
+
+		// Create a context with timeout for this attempt
+		timeoutCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+
+		resp, err := e.model.GenerateContent(timeoutCtx, genai.Text(prompt))
+		if err != nil {
+			lastErr = err
+			// Mark the current key as failed and try the next one
+			e.keyManager.MarkKeyFailed("")
+			time.Sleep(baseDelay * time.Duration(attempt))
+			continue
+		}
+
+		if len(resp.Candidates) > 0 && len(resp.Candidates[0].Content.Parts) > 0 {
+			if text, ok := resp.Candidates[0].Content.Parts[0].(genai.Text); ok {
+				return string(text), nil
 			}
 		}
-		return "", fmt.Errorf("query failed: %v", err)
+		lastErr = fmt.Errorf("unexpected response type")
+		time.Sleep(baseDelay * time.Duration(attempt))
 	}
-	defer rows.Close()
+	return "", fmt.Errorf("all retries failed: %v", lastErr)
+}
 
-	// Format results
-	results, err := formatResults(rows)
-	if err != nil {
-		return "", fmt.Errorf("failed to format results: %v", err)
-	}
+func cleanJSONResponse(resp string) string {
+    // Remove any markdown formatting
+    resp = strings.ReplaceAll(resp, "`", "")
+    resp = strings.TrimPrefix(resp, "```json")
+    resp = strings.TrimPrefix(resp, "```")
+    resp = strings.TrimSuffix(resp, "```")
+    return strings.TrimSpace(resp)
+}
 
-	return results, nil
+func cleanSQLQuery(sql string) string {
+    // Replace escaped newlines with spaces
+    sql = strings.ReplaceAll(sql, "\\n", " ")
+    // Remove any extra whitespace
+    sql = strings.Join(strings.Fields(sql), " ")
+    return sql
+}
+
+func extractSQLFromResponse(resp string) (string, error) {
+    // First try to parse as JSON
+    var result struct {
+        SQLQuery string `json:"sql_query"`
+    }
+    
+    resp = cleanJSONResponse(resp)
+    if err := json.Unmarshal([]byte(resp), &result); err != nil {
+        // If JSON parsing fails, try to extract SQL directly using regex
+        sqlPattern := `SELECT[\s\S]+?;`
+        re := regexp.MustCompile(sqlPattern)
+        if matches := re.FindString(resp); matches != "" {
+            return cleanSQLQuery(matches), nil
+        }
+        return "", fmt.Errorf("failed to extract SQL query: %v", err)
+    }
+    
+    if result.SQLQuery == "" {
+        return "", fmt.Errorf("no SQL query found in response")
+    }
+    
+    return cleanSQLQuery(result.SQLQuery), nil
+}
+
+func (e *NLQueryEngine) cleanSQLResponse(sql string) string {
+	// Remove markdown code block markers
+	sql = strings.TrimPrefix(sql, "```sql")
+	sql = strings.TrimPrefix(sql, "```")
+	sql = strings.TrimSuffix(sql, "```")
+	
+	// Remove any leading/trailing whitespace
+	sql = strings.TrimSpace(sql)
+	
+	return sql
+}
+
+func (e *NLQueryEngine) ProcessQuery(query string) (string, error) {
+    ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+    defer cancel()
+
+    fmt.Println("\nAnalyzing query...")
+    
+    // Generate SQL query with retry
+    prompt := e.promptBuilder.BuildQueryPrompt(query)
+    resp, err := e.generateWithRetry(ctx, prompt)
+    if err != nil {
+        return "", fmt.Errorf("failed to generate SQL: %v", err)
+    }
+
+    // Extract and display thought process if available
+    if strings.Contains(resp, "thought_process") {
+        var result struct {
+            ThoughtProcess string `json:"thought_process"`
+        }
+        cleanResp := cleanJSONResponse(resp)
+        if err := json.Unmarshal([]byte(cleanResp), &result); err == nil && result.ThoughtProcess != "" {
+            fmt.Printf("\nThought Process:\n%s\n", result.ThoughtProcess)
+        }
+    }
+
+    // Extract SQL query
+    sql, err := extractSQLFromResponse(resp)
+    if err != nil {
+        return "", fmt.Errorf("failed to extract SQL: %v\nResponse was: %s", err, resp)
+    }
+
+    fmt.Printf("\nGenerated SQL:\n%s\n", sql)
+
+    fmt.Println("\nValidating query...")
+    
+    // Validate the generated SQL with retry
+    validationPrompt := e.promptBuilder.BuildValidationPrompt(query, sql)
+    validation, err := e.generateWithRetry(ctx, validationPrompt)
+    if err != nil {
+        return "", fmt.Errorf("failed to validate SQL: %v", err)
+    }
+
+    validation = strings.TrimSpace(validation)
+    if !strings.EqualFold(validation, "VALID") {
+        return "", fmt.Errorf("invalid SQL generated: %s", validation)
+    }
+
+    fmt.Println("\nExecuting query...")
+    
+    // Execute the SQL query
+    rows, err := e.db.QueryContext(ctx, sql)
+    if err != nil {
+        // Generate user-friendly error message with retry
+        errorPrompt := e.promptBuilder.BuildErrorPrompt(query, err)
+        errorMsg, genErr := e.generateWithRetry(ctx, errorPrompt)
+        if genErr == nil {
+            return "", fmt.Errorf(errorMsg)
+        }
+        return "", fmt.Errorf("query failed: %v", err)
+    }
+    defer rows.Close()
+
+    fmt.Println("\nFormatting results...")
+    
+    // Format results
+    results, err := formatResults(rows)
+    if err != nil {
+        return "", fmt.Errorf("failed to format results: %v", err)
+    }
+
+    return results, nil
 }
 
 func formatResults(rows *sql.Rows) (string, error) {

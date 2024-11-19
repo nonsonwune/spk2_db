@@ -51,10 +51,9 @@ Common Queries:
    JOIN state s ON c.statecode = s.st_id
    WHERE c.year = 2020
    GROUP BY s.st_name
-   ORDER BY total_candidates DESC;`
+   ORDER BY total_candidates DESC;
 
-const ExamplePatterns = `Query Pattern Examples:
-
+Query Patterns:
 1. Medicine-related Searches:
    - For named courses only:
      LOWER(course_name) LIKE ANY(ARRAY['%medicine%', '%medical%', '%surgery%', '%health%'])
@@ -82,7 +81,36 @@ const ExamplePatterns = `Query Pattern Examples:
    - By institution: GROUP BY i.inname ORDER BY COUNT(*) DESC
    - By state: GROUP BY s.st_name ORDER BY COUNT(*) DESC
 
-const QueryExamples = `Example Queries and Their SQL:
+Query Pattern Examples:
+
+1. Medicine-related Searches:
+   - For named courses only:
+     LOWER(course_name) LIKE ANY(ARRAY["%medicine%", "%medical%", "%surgery%", "%health%"])
+     AND LOWER(course_name) NOT LIKE "course%"
+   
+   - For all courses (including code-based):
+     LOWER(course_name) LIKE ANY(ARRAY["%medicine%", "%medical%", "%surgery%", "%health%"])
+
+2. Course Code Searches:
+   - Exact match: course_code = "112838K"
+   - Pattern match: course_code LIKE "1128%"
+
+3. Named Courses Only:
+   - Pattern: LOWER(course_name) NOT LIKE "course%"
+   
+4. Code-Based Courses Only:
+   - Pattern: LOWER(course_name) LIKE "course%"
+
+5. Engineering Courses:
+   - Pattern: LOWER(course_name) LIKE "%engineering%"
+
+6. Admission Statistics:
+   - Basic: c.is_admitted = true
+   - With year: c.is_admitted = true AND c.year = 2020
+   - By institution: GROUP BY i.inname ORDER BY COUNT(*) DESC
+   - By state: GROUP BY s.st_name ORDER BY COUNT(*) DESC
+
+Example Queries and Their SQL:
 
 1. "Show me the top 5 institutions by number of admissions in 2020"
 SQL:
@@ -102,7 +130,7 @@ SELECT s.st_name, COUNT(DISTINCT c.regnumber) as applicant_count
 FROM candidate c
 JOIN state s ON c.statecode = s.st_id
 JOIN course co ON c.app_course1 = co.course_code
-WHERE LOWER(co.course_name) LIKE '%medicine%'
+WHERE LOWER(co.course_name) LIKE "%medicine%"
 AND c.year = 2023
 GROUP BY s.st_name
 ORDER BY applicant_count DESC
@@ -119,7 +147,7 @@ SELECT
 FROM candidate c
 JOIN state s ON c.statecode = s.st_id
 JOIN course co ON c.app_course1 = co.course_code
-WHERE LOWER(co.course_name) LIKE '%biochemistry%'
+WHERE LOWER(co.course_name) LIKE "%biochemistry%"
 AND c.year = 2023
 GROUP BY s.st_name
 ORDER BY total_applicants DESC;
@@ -140,7 +168,7 @@ WITH RegionalStats AS (
     FROM candidate c
     JOIN state s ON c.statecode = s.st_id
     JOIN course co ON c.app_course1 = co.course_code
-    WHERE LOWER(co.course_name) LIKE '%engineering%'
+    WHERE LOWER(co.course_name) LIKE "%engineering%"
     AND c.year = 2023
     GROUP BY 
         CASE 

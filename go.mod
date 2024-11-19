@@ -3,6 +3,7 @@ module github.com/nonsonwune/spk2_db
 go 1.21.0
 
 require (
+	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/fatih/color v1.18.0
 	github.com/google/generative-ai-go v0.18.0
 	github.com/joho/godotenv v1.5.1

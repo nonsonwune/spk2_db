@@ -15,14 +15,12 @@ import (
     "time"
 
     "github.com/fatih/color"
-    "github.com/google/generative-ai-go/genai"
     "github.com/joho/godotenv"
     _ "github.com/lib/pq"
     "github.com/nonsonwune/spk2_db/importer"
     "github.com/nonsonwune/spk2_db/migrations"
     "github.com/nonsonwune/spk2_db/nlquery"
     "github.com/olekukonko/tablewriter"
-    "google.golang.org/api/option"
 )
 
 // Config holds application configuration
@@ -175,7 +173,7 @@ func handleMenuChoice(ctx context.Context, db *sql.DB, choice string) error {
     case "20":
         return displayCourseCompetitiveness(ctx, db)
     case "21":
-        return handleNaturalLanguageQuery(ctx, db)
+        return handleNaturalLanguageQuery(db)
     case "0":
         return errExit
     default:
@@ -1377,29 +1375,17 @@ func handleCourseImport(ctx context.Context, db *sql.DB) error {
     return nil
 }
 
-func handleNaturalLanguageQuery(ctx context.Context, db *sql.DB) error {
-    // Verify API key
-    apiKey := os.Getenv("GEMINI_API_KEY")
-    if apiKey == "" {
-        return fmt.Errorf("GEMINI_API_KEY not found in environment variables")
-    }
-
-    // Initialize Gemini client
-    client, err := genai.NewClient(ctx, option.WithAPIKey(apiKey))
-    if err != nil {
-        return fmt.Errorf("failed to create Gemini client: %v", err)
-    }
-    defer client.Close()
-
-    model := client.GenerativeModel("gemini-1.5-flash")
-    temp := float32(0.2)
-    model.Temperature = &temp
-
-    // Initialize NL Query Engine
-    engine := nlquery.NewNLQueryEngine(db, model)
-
+func handleNaturalLanguageQuery(db *sql.DB) error {
     fmt.Println("\nNatural Language Query")
     fmt.Println("=====================")
+
+    // Initialize the NL query engine
+    engine, err := nlquery.NewNLQueryEngine(db)
+    if err != nil {
+        fmt.Printf("Error initializing query engine: %v\n", err)
+        return err
+    }
+
     fmt.Println("Enter your question (or 'exit' to return to menu):")
 
     for {
@@ -1411,7 +1397,7 @@ func handleNaturalLanguageQuery(ctx context.Context, db *sql.DB) error {
 
         // Process the query using the NLQueryEngine
         fmt.Println("\nProcessing query... (this may take a few seconds)")
-        result, err := engine.ProcessQuery(ctx, query)
+        result, err := engine.ProcessQuery(query)
         if err != nil {
             fmt.Printf("\nError processing query: %v\n", err)
             continue

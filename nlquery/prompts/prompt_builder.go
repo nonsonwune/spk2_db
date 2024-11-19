@@ -100,65 +100,128 @@ func (a *SchemaAgent) Process(query string) (string, error) {
 		"candidate_disabilities": "LEFT JOIN candidate_disabilities cd ON c.regnumber = cd.cand_reg_number",
 	}
 	
-	return fmt.Sprintf("%v|%v", tables, joins), nil
+	a.schemaContext = fmt.Sprintf("%v|%v", tables, joins)
+	return a.schemaContext, nil
 }
 
 // PromptBuilder handles the construction of prompts for the LLM
-type PromptBuilder struct{}
+type PromptBuilder struct {
+    schemaContext string
+}
 
 func NewPromptBuilder() *PromptBuilder {
-	return &PromptBuilder{}
+    schemaAgent := &SchemaAgent{}
+    schemaContext, _ := schemaAgent.Process("")
+    return &PromptBuilder{
+        schemaContext: schemaContext,
+    }
 }
 
 func (pb *PromptBuilder) BuildQueryPrompt(query string) string {
-	return fmt.Sprintf(`You are a SQL query generator for a JAMB (Joint Admissions and Matriculation Board) database.
+    return fmt.Sprintf(`You are a SQL query generator for a JAMB database system. Your task is to convert natural language questions into SQL queries.
 
+Database Schema:
 %s
 
-%s
+User Question: %s
 
-Given this context, generate a SQL query for this question:
-%s
+Instructions:
+1. Analyze the question carefully
+2. Consider the database schema
+3. Generate a valid PostgreSQL query
+4. Return your response in this exact JSON format:
+{
+    "thought_process": "Step by step explanation of your reasoning",
+    "sql_query": "The complete SQL query with proper table aliases and joins",
+    "explanation": "Brief explanation of what the query does"
+}
 
-Return only the SQL query without any explanation or markdown formatting.`, SchemaContext, QueryExamples, query)
+Important Rules:
+1. Use proper table aliases (e.g., c for candidate, co for course)
+2. Always check if tables exist before joining
+3. Use INNER JOIN for required relationships, LEFT JOIN for optional ones
+4. Double check column names match the schema exactly
+5. For course name matching:
+   - Exact single course (e.g., "Pharmacy"): 
+     UPPER(co.course_name) = 'PHARMACY'
+   - Related courses (e.g., "pharmacy-related", "pharmacy courses"):
+     LOWER(co.course_name) LIKE LOWER('%%pharm%%')
+   - Multiple specific courses:
+     UPPER(co.course_name) IN ('MEDICINE', 'SURGERY', 'DENTISTRY')
+6. Return ONLY the JSON response with NO markdown formatting
+
+Course Query Guidelines:
+- Single course: "who applied pharmacy"
+  → UPPER(co.course_name) = 'PHARMACY'
+  
+- Related courses: "who applied pharmacy courses"
+  → LOWER(co.course_name) LIKE LOWER('%%pharm%%')
+  
+- Multiple courses: "who applied medicine or surgery"
+  → UPPER(co.course_name) IN ('MEDICINE', 'SURGERY')
+  
+- Course field: "who applied medical courses"
+  → LOWER(co.course_name) LIKE LOWER('%%medic%%')
+  OR LOWER(co.course_name) LIKE LOWER('%%surge%%')
+  OR LOWER(co.course_name) LIKE LOWER('%%doctor%%')
+
+Example Responses:
+{
+    "thought_process": "1. User wants specific course statistics\n2. Use exact match\n3. Join and filter",
+    "sql_query": "SELECT c.gender, COUNT(*) AS applicant_count FROM candidate c INNER JOIN course co ON c.app_course1 = co.course_code WHERE c.year = 2023 AND UPPER(co.course_name) = 'MEDICINE' GROUP BY c.gender",
+    "explanation": "Counts male and female candidates who applied for Medicine specifically"
+}
+
+{
+    "thought_process": "1. User wants medical field statistics\n2. Use pattern matching\n3. Join and filter",
+    "sql_query": "SELECT c.gender, COUNT(*) AS applicant_count FROM candidate c INNER JOIN course co ON c.app_course1 = co.course_code WHERE c.year = 2023 AND (LOWER(co.course_name) LIKE LOWER('%%medic%%') OR LOWER(co.course_name) LIKE LOWER('%%surge%%')) GROUP BY c.gender",
+    "explanation": "Counts male and female candidates who applied for any medical-related course"
+}`, pb.schemaContext, query)
 }
 
 func (pb *PromptBuilder) BuildErrorPrompt(query string, err error) string {
-	return fmt.Sprintf(`Given this failed query attempt:
-Query: %s
-Error: %s
+    return fmt.Sprintf(`Given this error while executing a SQL query: %v
 
-Explain in simple terms what went wrong and how the user can modify their question to get better results.
-Be specific about what terms or filters they could add to make the query more precise.`, query, err)
+Please explain what went wrong in user-friendly terms, considering this was the original question:
+%s
+
+Return ONLY the explanation with NO markdown formatting or code blocks.`, err, query)
 }
 
-func (pb *PromptBuilder) BuildValidationPrompt(query string, sql string) string {
-	return fmt.Sprintf(`Validate this SQL query for the JAMB database:
+func (pb *PromptBuilder) BuildValidationPrompt(query, sql string) string {
+    return fmt.Sprintf(`Validate this SQL query for the JAMB database:
+
 Original Question: %s
+
 Generated SQL:
 %s
 
-Check for:
-1. SQL syntax errors
-2. Missing or incorrect table joins
-3. Appropriate filtering conditions
-4. Proper grouping and ordering
-5. Reasonable result limits
+Database Schema:
+%s
 
-Respond with either:
-"VALID" if the query looks correct
-or
-"INVALID: [reason]" if there are issues`, query, sql)
+Return "VALID" if the query is correct, or explain the specific issues if invalid. Check for:
+1. Correct table and column names
+2. Proper JOIN conditions
+3. Correct filtering conditions
+4. Appropriate GROUP BY if using aggregations
+5. No syntax errors
+
+Return ONLY "VALID" or a specific error message.`, query, sql, pb.schemaContext)
 }
 
 func (pb *PromptBuilder) ExtractYear(query string) string {
-	return fmt.Sprintf(`Extract the year from this query: "%s"
-
-Rules:
-1. Return only the 4-digit year if found
-2. Return "current_year" if no specific year is mentioned
-3. Handle variations like "in 2019", "during 2019", "2019 admissions"
-4. If multiple years are mentioned, return the most relevant one
-
-Year:`, strings.ToLower(query))
+    query = strings.ToLower(query)
+    if strings.Contains(query, "2020") {
+        return "2020"
+    }
+    if strings.Contains(query, "2021") {
+        return "2021"
+    }
+    if strings.Contains(query, "2022") {
+        return "2022"
+    }
+    if strings.Contains(query, "2023") {
+        return "2023"
+    }
+    return "2023" // Default to latest year
 }
