@@ -7,16 +7,16 @@ WHAT:
 - Added sections for change details, rationale, and technical specifics
 
 WHY:
-- Ensure consistent documentation of system changes
+- Ensure consistent documentation of AI-driven changes
 - Maintain clear historical record of modifications
-- Enable better project history tracking
+- Enable better tracking of project evolution
 - Facilitate team communication and code review
 
 TECHNICAL DETAILS:
 - Format includes date stamp [YYYY-MM-DD]
 - Structured sections: WHAT, WHY, TECHNICAL DETAILS
-- Modified files tracking with ~ prefix
-- Detailed listing of specific changes
+- Modified files tracking with ~ indicator
+- Detailed listing of changes and their impacts
 
 FILES:
 ~ ai_update.txt
@@ -1310,3 +1310,33 @@ FILES:
 - Improved code organization and package structure
 
 This update focuses on improving the query output format to enhance user experience and data accessibility.
+
+[2024-01-11] Case-Sensitive State Name Handling
+
+WHAT:
+- Updated prompt builder to handle state names in uppercase
+- Added explicit rules for state name case handling
+- Fixed JSON response parsing and SQL extraction
+- Added state-specific query examples
+
+WHY:
+- Fix incorrect results due to case-sensitive state name matching
+- Ensure accurate candidate counts for state-based queries
+- Improve query reliability and consistency
+- Better handle markdown formatting in AI responses
+
+TECHNICAL DETAILS:
+- Added state name case rules to prompt:
+  * Always use UPPER case: s.st_name = 'ONDO'
+  * All state names stored in CAPS
+- Improved JSON response cleaning:
+  * Better handling of markdown code blocks
+  * More robust SQL extraction with fallback
+  * Enhanced error messages with response context
+- Added state query examples:
+  * "candidates from Ondo state" → s.st_name = 'ONDO'
+  * "students in Lagos" → s.st_name = 'LAGOS'
+
+FILES:
+~ nlquery/prompts/prompt_builder.go
+~ nlquery/natural_language.go

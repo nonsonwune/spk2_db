@@ -98,11 +98,12 @@ func (e *NLQueryEngine) generateWithRetry(ctx context.Context, prompt string) (s
 
 func cleanJSONResponse(resp string) string {
     // Remove any markdown formatting
+    resp = strings.ReplaceAll(resp, "```json", "")
+    resp = strings.ReplaceAll(resp, "```", "")
     resp = strings.ReplaceAll(resp, "`", "")
-    resp = strings.TrimPrefix(resp, "```json")
-    resp = strings.TrimPrefix(resp, "```")
-    resp = strings.TrimSuffix(resp, "```")
-    return strings.TrimSpace(resp)
+    // Trim any whitespace before and after
+    resp = strings.TrimSpace(resp)
+    return resp
 }
 
 func cleanSQLQuery(sql string) string {
@@ -114,20 +115,22 @@ func cleanSQLQuery(sql string) string {
 }
 
 func extractSQLFromResponse(resp string) (string, error) {
-    // First try to parse as JSON
+    // Clean the response first
+    resp = cleanJSONResponse(resp)
+    
+    // Try to parse as JSON
     var result struct {
         SQLQuery string `json:"sql_query"`
     }
     
-    resp = cleanJSONResponse(resp)
     if err := json.Unmarshal([]byte(resp), &result); err != nil {
         // If JSON parsing fails, try to extract SQL directly using regex
-        sqlPattern := `SELECT[\s\S]+?;`
+        sqlPattern := `(?i)SELECT\s+.*?(?:;|$)`
         re := regexp.MustCompile(sqlPattern)
         if matches := re.FindString(resp); matches != "" {
             return cleanSQLQuery(matches), nil
         }
-        return "", fmt.Errorf("failed to extract SQL query: %v", err)
+        return "", fmt.Errorf("failed to extract SQL query: %v\nResponse was: %s", err, resp)
     }
     
     if result.SQLQuery == "" {

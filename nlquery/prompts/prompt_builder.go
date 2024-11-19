@@ -142,40 +142,45 @@ Important Rules:
 3. Use INNER JOIN for required relationships, LEFT JOIN for optional ones
 4. Double check column names match the schema exactly
 5. For course name matching:
-   - Exact single course (e.g., "Pharmacy"): 
-     UPPER(co.course_name) = 'PHARMACY'
-   - Related courses (e.g., "pharmacy-related", "pharmacy courses"):
-     LOWER(co.course_name) LIKE LOWER('%%pharm%%')
-   - Multiple specific courses:
-     UPPER(co.course_name) IN ('MEDICINE', 'SURGERY', 'DENTISTRY')
-6. Return ONLY the JSON response with NO markdown formatting
+   - Exact single course: UPPER(co.course_name) = 'PHARMACY'
+   - Related courses: LOWER(co.course_name) LIKE LOWER('%%pharm%%')
+   - Multiple courses: UPPER(co.course_name) IN ('MEDICINE', 'SURGERY')
+6. For state names:
+   - Always use UPPER case: s.st_name = 'ONDO'
+   - All state names are stored in CAPS
+7. For GROUP BY:
+   - Only use GROUP BY with aggregate functions (COUNT, SUM, AVG, etc.)
+   - When grouping, include all non-aggregated columns
+   - Don't use GROUP BY for simple filtering or listing
+8. Return ONLY the JSON response with NO markdown formatting
 
-Course Query Guidelines:
-- Single course: "who applied pharmacy"
-  → UPPER(co.course_name) = 'PHARMACY'
+Query Guidelines:
+- State queries:
+  "candidates from Ondo state" → s.st_name = 'ONDO'
+  "students in Lagos" → s.st_name = 'LAGOS'
   
-- Related courses: "who applied pharmacy courses"
-  → LOWER(co.course_name) LIKE LOWER('%%pharm%%')
-  
-- Multiple courses: "who applied medicine or surgery"
-  → UPPER(co.course_name) IN ('MEDICINE', 'SURGERY')
-  
-- Course field: "who applied medical courses"
-  → LOWER(co.course_name) LIKE LOWER('%%medic%%')
-  OR LOWER(co.course_name) LIKE LOWER('%%surge%%')
-  OR LOWER(co.course_name) LIKE LOWER('%%doctor%%')
+- Course queries:
+  "who applied pharmacy" → UPPER(co.course_name) = 'PHARMACY'
+  "pharmacy courses" → LOWER(co.course_name) LIKE LOWER('%%pharm%%')
+  "medicine or surgery" → UPPER(co.course_name) IN ('MEDICINE', 'SURGERY')
+  "medical courses" → LOWER(co.course_name) LIKE LOWER('%%medic%%')
+
+- Aggregate queries:
+  "count by gender" → GROUP BY c.gender
+  "total by state" → GROUP BY s.st_name
+  "list all candidates" → NO GROUP BY needed
 
 Example Responses:
 {
-    "thought_process": "1. User wants specific course statistics\n2. Use exact match\n3. Join and filter",
-    "sql_query": "SELECT c.gender, COUNT(*) AS applicant_count FROM candidate c INNER JOIN course co ON c.app_course1 = co.course_code WHERE c.year = 2023 AND UPPER(co.course_name) = 'MEDICINE' GROUP BY c.gender",
-    "explanation": "Counts male and female candidates who applied for Medicine specifically"
+    "thought_process": "1. User wants count by state\n2. Join state table\n3. Use UPPER case state name\n4. Group by gender for counts",
+    "sql_query": "SELECT c.gender, COUNT(*) AS num_candidates FROM candidate c JOIN state s ON c.statecode = s.st_id WHERE s.st_name = 'LAGOS' AND c.year = 2023 GROUP BY c.gender",
+    "explanation": "Counts candidates from Lagos state by gender for 2023"
 }
 
 {
-    "thought_process": "1. User wants medical field statistics\n2. Use pattern matching\n3. Join and filter",
-    "sql_query": "SELECT c.gender, COUNT(*) AS applicant_count FROM candidate c INNER JOIN course co ON c.app_course1 = co.course_code WHERE c.year = 2023 AND (LOWER(co.course_name) LIKE LOWER('%%medic%%') OR LOWER(co.course_name) LIKE LOWER('%%surge%%')) GROUP BY c.gender",
-    "explanation": "Counts male and female candidates who applied for any medical-related course"
+    "thought_process": "1. User wants list of candidates\n2. Join state table\n3. Filter by state\n4. No grouping needed",
+    "sql_query": "SELECT c.regnumber, c.firstname, c.surname, c.gender FROM candidate c JOIN state s ON c.statecode = s.st_id WHERE s.st_name = 'LAGOS' AND c.year = 2023",
+    "explanation": "Lists all candidates from Lagos state in 2023"
 }`, pb.schemaContext, query)
 }
 
