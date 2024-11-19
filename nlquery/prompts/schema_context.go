@@ -14,6 +14,54 @@ const SchemaContext = `Database Schema and Course Information:
    - IMPORTANT: Code-based courses are valid courses, not placeholders
 
 3. Tables and Their Relationships:
+   - faculty
+     * Primary Key: fac_id (integer)
+     * Columns:
+       - fac_code: Faculty code (varchar(10))
+       - fac_name: Full faculty name (varchar(100))
+       - fac_abv: Faculty abbreviation (varchar(20))
+     * Referenced by:
+       - course.facid -> faculty.fac_id
+
+   - subject
+     * Primary Key: su_id (integer)
+     * Columns:
+       - su_abrv: Subject abbreviation (varchar(10))
+       - su_name: Full subject name (varchar(100))
+     * Referenced by:
+       - candidate_scores.subject_id -> subject.su_id
+       - subject_mapping_2023.su_id -> subject.su_id
+     * Available Subjects:
+       1. Use of English (Core)
+       2. Mathematics (Core)
+       3. Sciences:
+          - Biology
+          - Chemistry
+          - Physics
+          - Computer Studies
+          - Agriculture
+       4. Arts and Humanities:
+          - Literature in English
+          - History
+          - Government
+          - Economics
+          - Geography
+       5. Languages:
+          - Arabic
+          - French
+          - Hausa
+          - Igbo
+          - Yoruba
+       6. Other Subjects:
+          - Art (Fine Art)
+          - Commerce
+          - Home Economics
+          - Islamic Studies
+          - Christian Religious Knowledge
+          - Music
+          - Physical and Health Education
+          - Principles of Accounts
+
    - candidate
      * Primary Key: regnumber
      * Foreign Keys:
@@ -29,6 +77,14 @@ const SchemaContext = `Database Schema and Course Information:
        - Code-based name (e.g., "Course 112838K")
      * Foreign Keys:
        - facid -> faculty.fac_id (faculty)
+
+   - institution_type
+     * Primary Key: intyp_id (integer)
+     * Columns:
+       - intyp_desc: Institution type description (varchar(100))
+       - inst_cat: Institution category (varchar(20))
+     * Referenced by:
+       - institution.intyp -> institution_type.intyp_id
 
    - institution
      * Primary Key: inid

@@ -1,0 +1,8 @@
+{
+    "north_central": ["BENUE", "FCT", "KOGI", "KWARA", "NASARAWA", "NIGER", "PLATEAU"],
+    "north_east": ["ADAMAWA", "BAUCHI", "BORNO", "GOMBE", "TARABA", "YOBE"],
+    "north_west": ["KADUNA", "KANO", "KATSINA", "KEBBI", "SOKOTO", "ZAMFARA", "JIGAWA"],
+    "south_east": ["ABIA", "ANAMBRA", "EBONYI", "ENUGU", "IMO"],
+    "south_south": ["AKWA IBOM", "BAYELSA", "CROSS RIVER", "DELTA", "EDO", "RIVERS"],
+    "south_west": ["EKITI", "LAGOS", "OGUN", "ONDO", "OSUN", "OYO"]
+}

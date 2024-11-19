@@ -1252,3 +1252,61 @@ Latest Updates:
    - Add support for multi-course comparisons
 
 Last Updated: 2024-01-22
+
+[2024-01-11] AI Update: Query Output Format Changes
+
+WHAT:
+- Updated AI status with new query output format changes
+
+WHY:
+- Improve user experience with better query output formatting
+- Enhance data accessibility and readability
+
+TECHNICAL DETAILS:
+- Added formatted .txt output for all queries
+- Created query_tables/ directory for storing query results
+- Each query result includes:
+  * Original query
+  * Generated SQL
+  * Results table with headers
+  * Brief table description
+  * Timestamp in filename
+
+FILES:
+~ main.go
+
+[2024-01-11] AI Development Progress Update
+
+# AI Development Progress Update
+
+## Query Output Format Changes
+- Added formatted .txt output for all queries
+- Created query_tables/ directory for storing query results
+- Each query result includes:
+  * Original query
+  * Generated SQL
+  * Results table with headers
+  * Brief table description
+  * Timestamp in filename
+
+## Current Status
+- Query output format changes are implemented
+- Code is better organized for maintainability
+- Package structure follows Go best practices
+
+## Next Steps
+1. Enhance query processing capabilities
+2. Add more comprehensive test cases
+3. Improve error handling and logging
+4. Consider adding query caching
+5. Implement query result validation
+
+## Known Issues
+- None currently identified
+
+## Recent Changes
+- Updated query output format to include original query and generated SQL
+- Created query_tables/ directory for storing query results
+- Improved code organization and package structure
+
+This update focuses on improving the query output format to enhance user experience and data accessibility.

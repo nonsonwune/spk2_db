@@ -19,7 +19,6 @@ import (
     _ "github.com/lib/pq"
     "github.com/olekukonko/tablewriter"
     "github.com/nonsonwune/spk2_db/nlquery"
-    "github.com/nonsonwune/spk2_db/nlquery/prompts"
     "github.com/nonsonwune/spk2_db/importer"
     "github.com/nonsonwune/spk2_db/migrations"
 )
@@ -1388,83 +1387,38 @@ func handleNaturalLanguageQuery(ctx context.Context, db *sql.DB) error {
             return nil
         }
 
-        // Initialize query builder
-        builder := prompts.NewPromptBuilder()
-
-        sqlQuery, err := nlquery.GenerateSQL(query, builder)
+        sqlQuery, description, err := nlquery.GenerateSQL(query)
         if err != nil {
-            color.Red("Error generating query: %v", err)
+            fmt.Printf("Error generating SQL: %v\n", err)
             continue
         }
 
-        // Display the generated SQL query
-        color.Blue("\nGenerated SQL Query:")
-        fmt.Println(sqlQuery)
-        fmt.Println()
+        fmt.Printf("\nGenerated SQL Query:\n\n%s\n\n", sqlQuery)
 
-        // Execute the query
-        rows, err := db.QueryContext(ctx, sqlQuery)
+        rows, err := db.Query(sqlQuery)
         if err != nil {
-            color.Red("Error executing query: %v", err)
+            fmt.Printf("Error executing query: %v\n", err)
             continue
         }
         defer rows.Close()
 
-        // Get column names
-        cols, err := rows.Columns()
+        fmt.Printf("\nProcessing query: %s\n", query)
+        sqlQuery, description, err = nlquery.GenerateSQL(query)
         if err != nil {
-            color.Red("Error getting columns: %v", err)
+            fmt.Printf("Error generating SQL: %v\n", err)
             continue
         }
 
-        // Create table writer
-        table := tablewriter.NewWriter(os.Stdout)
-        table.SetHeader(cols)
-        table.SetAutoWrapText(false)
-        table.SetAutoFormatHeaders(true)
-        table.SetHeaderAlignment(tablewriter.ALIGN_LEFT)
-        table.SetAlignment(tablewriter.ALIGN_LEFT)
-        table.SetCenterSeparator("")
-        table.SetColumnSeparator("")
-        table.SetRowSeparator("")
-        table.SetHeaderLine(false)
-        table.SetBorder(false)
-        table.SetTablePadding("\t")
-        table.SetNoWhiteSpace(true)
-
-        // Scan and display results
-        values := make([]interface{}, len(cols))
-        valuePtrs := make([]interface{}, len(cols))
-        for i := range values {
-            valuePtrs[i] = &values[i]
-        }
-
-        for rows.Next() {
-            err := rows.Scan(valuePtrs...)
-            if err != nil {
-                color.Red("Error scanning row: %v", err)
-                continue
-            }
-
-            // Convert values to strings
-            var row []string
-            for _, val := range values {
-                if val == nil {
-                    row = append(row, "NULL")
-                } else {
-                    row = append(row, fmt.Sprintf("%v", val))
-                }
-            }
-            table.Append(row)
-        }
-
-        if err = rows.Err(); err != nil {
-            color.Red("Error reading rows: %v", err)
+        rows, err = db.Query(sqlQuery)
+        if err != nil {
+            fmt.Printf("Error executing query: %v\n", err)
             continue
         }
+        defer rows.Close()
 
-        // Print results
-        fmt.Println("\nResults:")
-        table.Render()
+        err = nlquery.FormatQueryResult(query, sqlQuery, description, rows)
+        if err != nil {
+            fmt.Printf("Error formatting results: %v\n", err)
+        }
     }
 }

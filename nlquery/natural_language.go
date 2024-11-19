@@ -42,9 +42,24 @@ func NewNLQueryEngine(dbConfig map[string]string) (*NLQueryEngine, error) {
 		return nil, fmt.Errorf("error initializing Gemini client: %v", err)
 	}
 
-	model := client.GenerativeModel("gemini-1.5-pro-latest")
+	// Use the recommended model version
+	model := client.GenerativeModel("gemini-1.5-flash")
+	
+	// Configure model parameters
 	temp := float32(0.2) // Lower temperature for more precise SQL
 	model.Temperature = &temp
+	
+	// Set safety settings as recommended
+	model.SafetySettings = []*genai.SafetySetting{
+		{
+			Category:  genai.HarmCategoryHarassment,
+			Threshold: genai.HarmBlockNone,
+		},
+		{
+			Category:  genai.HarmCategoryHateSpeech,
+			Threshold: genai.HarmBlockNone,
+		},
+	}
 
 	return &NLQueryEngine{
 		client:  client,
@@ -87,38 +102,91 @@ func (e *NLQueryEngine) ProcessQuery(ctx context.Context, query string) error {
 
 func (e *NLQueryEngine) generateSQLQuery(ctx context.Context, query string) (string, error) {
 	var sqlQuery string
-	var err error
+	var lastErr error
 
-	for retries := 3; retries > 0; retries-- {
-		chat := e.model.StartChat()
-		prompt := e.prompts.BuildQueryPrompt(query)
-		
-		var resp *genai.GenerateContentResponse
-		resp, err = chat.SendMessage(ctx, genai.Text(prompt))
-		if err == nil && len(resp.Candidates) > 0 {
-			text := resp.Candidates[0].Content.Parts[0]
-			if textStr, ok := text.(genai.Text); ok {
-				sqlQuery = string(textStr)
-				sqlQuery = strings.TrimSpace(sqlQuery)
-				if strings.HasPrefix(sqlQuery, "```sql") {
-					sqlQuery = strings.TrimPrefix(sqlQuery, "```sql")
-					sqlQuery = strings.TrimSuffix(sqlQuery, "```")
+	// Implement exponential backoff for retries
+	backoff := []time.Duration{
+		1 * time.Second,
+		2 * time.Second,
+		4 * time.Second,
+	}
+
+	for i, wait := range backoff {
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		default:
+			chat := e.model.StartChat()
+			prompt := e.prompts.BuildQueryPrompt(query)
+			
+			resp, err := chat.SendMessage(ctx, genai.Text(prompt))
+			if err != nil {
+				lastErr = err
+				if isRateLimitError(err) {
+					time.Sleep(wait)
+					continue
 				}
-				sqlQuery = strings.TrimSpace(sqlQuery)
-				break
+				// For other errors, log and retry
+				fmt.Printf("Attempt %d failed: %v\n", i+1, err)
+				time.Sleep(wait)
+				continue
 			}
+
+			if len(resp.Candidates) == 0 {
+				lastErr = fmt.Errorf("no response candidates")
+				time.Sleep(wait)
+				continue
+			}
+
+			// Extract and clean SQL from response
+			sqlQuery, err = extractSQLFromResponse(resp.Candidates[0].Content.Parts[0])
+			if err != nil {
+				lastErr = err
+				time.Sleep(wait)
+				continue
+			}
+
+			return sqlQuery, nil
 		}
-		time.Sleep(time.Second)
 	}
 
-	// Check for errors first
-	if err != nil {
-		return "", fmt.Errorf("failed to generate SQL query: %v", err)
+	if lastErr != nil {
+		return "", fmt.Errorf("all attempts failed, last error: %v", lastErr)
+	}
+	return "", fmt.Errorf("failed to generate SQL query after all attempts")
+}
+
+// Helper function to check for rate limit errors
+func isRateLimitError(err error) bool {
+	return strings.Contains(strings.ToLower(err.Error()), "rate limit") ||
+		strings.Contains(strings.ToLower(err.Error()), "quota exceeded")
+}
+
+// Helper function to extract SQL from response
+func extractSQLFromResponse(content interface{}) (string, error) {
+	text, ok := content.(genai.Text)
+	if !ok {
+		return "", fmt.Errorf("unexpected response type: %T", content)
 	}
 
-	// Then check for empty query
+	sqlQuery := string(text)
+	sqlQuery = strings.TrimSpace(sqlQuery)
+
+	// Handle different SQL code block formats
+	formats := []string{"```sql", "```SQL", "```postgresql"}
+	for _, format := range formats {
+		if strings.HasPrefix(sqlQuery, format) {
+			sqlQuery = strings.TrimPrefix(sqlQuery, format)
+			if idx := strings.LastIndex(sqlQuery, "```"); idx != -1 {
+				sqlQuery = sqlQuery[:idx]
+			}
+			break
+		}
+	}
+
+	sqlQuery = strings.TrimSpace(sqlQuery)
 	if sqlQuery == "" {
-		return "", fmt.Errorf("failed to generate SQL query: empty response")
+		return "", fmt.Errorf("empty SQL query after extraction")
 	}
 
 	return sqlQuery, nil
