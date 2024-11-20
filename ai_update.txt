@@ -736,105 +736,6 @@ Added a new natural language to SQL query system with specialized roles:
    - Determines required operations
 
    SQLArchitect:
-   - Constructs SQL queries
-   - Handles complex joins and subqueries
-   - Ensures query efficiency
-
-   DataValidator:
-   - Implements data quality checks
-   - Handles NULL values and type conversions
-   - Ensures statistical validity
-
-   OutputEngineer:
-   - Formats query results
-   - Creates clear table layouts
-   - Generates result summaries
-
-Files Created:
-- natural_language.py: Main implementation file
-
-Next Steps:
-1. Implement natural language processing logic
-2. Add query templates and patterns
-3. Enhance error handling and validation
-4. Add more export formats
-
-Impact:
-- Simplified database querying for non-technical users
-- Improved data accessibility
-- Enhanced result presentation
-- Flexible output options
-
-[2024-01-11] Natural Language Query System Enhancement
-
-Implemented a Go-based natural language to SQL query system using Gemini API:
-
-1. Core Components:
-   - NLQueryEngine: Main engine for processing natural language queries
-   - Gemini API Integration: For intelligent query understanding
-   - SQL Query Generation: Templates and dynamic query construction
-   - Result Formatting: Table-based output presentation
-
-2. Technical Features:
-   - Gemini Pro Model Integration
-     * Temperature: 0.3 for precise SQL generation
-     * TopK: 1 for focused responses
-     * TopP: 0.8 for balanced creativity
-   
-   - SQL Generation Capabilities:
-     * Query templates for common operations
-     * Dynamic query construction
-     * Schema-aware query building
-     * Statistical validation
-
-   - Database Integration:
-     * PostgreSQL connection management
-     * Efficient query execution
-     * Result set handling
-     * Error management
-
-3. Enhanced Functionality:
-   - Natural Language Understanding:
-     * Context-aware query analysis
-     * Entity recognition
-     * Intent classification
-     * Relationship mapping
-
-   - Query Generation:
-     * Template-based query construction
-     * Dynamic parameter handling
-     * Join optimization
-     * Condition building
-
-   - Result Presentation:
-     * Formatted table output
-     * Column alignment
-     * Data type handling
-     * Error reporting
-
-4. Security & Configuration:
-   - Environment-based configuration
-   - Secure API key handling
-   - Database connection pooling
-   - Query sanitization
-
-Files Modified:
-- natural_language.go: Complete rewrite in Go
-- Added Gemini API integration
-- Enhanced query processing pipeline
-
-Impact:
-- Improved query understanding
-- More accurate SQL generation
-- Better error handling
-- Enhanced result presentation
-- Optimized performance
-
-Next Steps:
-1. Implement caching for common queries
-2. Add more query templates
-3. Enhance error messages
-4. Add export functionality
 
 [2024-01-11] AI Progress Update
 
@@ -977,8 +878,6 @@ FILES:
 2. Document supported query patterns
 3. Add troubleshooting guide
 
-This update focuses on the integration of the natural language query system and identifies immediate improvements needed for query generation reliability.
-
 [2024-01-11] AI Development Update - Natural Language Query System
 
 Current Status:
@@ -1017,7 +916,7 @@ Current Status:
       - Optimize JOIN operations
       - Add query execution time logging
 
-5. Next Steps:
+5. Next Steps
    - Implement retry mechanism for API calls
    - Create a library of common query templates
    - Add query validation before execution
@@ -1137,8 +1036,6 @@ Date: [Current Date]
    - Add new example queries for common patterns
    - Maintain clear error messages
    - Test with various query complexities
-
-This update significantly improves the natural language query system by leveraging Gemini's capabilities more effectively and providing better context about the database structure.
 
 [2024-01-11] JAMB Database Analysis Update
 
@@ -1309,34 +1206,451 @@ FILES:
 - Created query_tables/ directory for storing query results
 - Improved code organization and package structure
 
-This update focuses on improving the query output format to enhance user experience and data accessibility.
-
-[2024-01-11] Case-Sensitive State Name Handling
+[2024-01-11] Institution Table Name Fix
 
 WHAT:
-- Updated prompt builder to handle state names in uppercase
-- Added explicit rules for state name case handling
-- Fixed JSON response parsing and SQL extraction
-- Added state-specific query examples
+- Fixed institution table reference in data_importer.go
+- Updated SQL query in InstitutionMapper
 
 WHY:
-- Fix incorrect results due to case-sensitive state name matching
-- Ensure accurate candidate counts for state-based queries
-- Improve query reliability and consistency
-- Better handle markdown formatting in AI responses
+- Fix institution mapper initialization error
+- Maintain consistent singular table naming convention
+- Enable successful data import process
 
 TECHNICAL DETAILS:
-- Added state name case rules to prompt:
-  * Always use UPPER case: s.st_name = 'ONDO'
-  * All state names stored in CAPS
-- Improved JSON response cleaning:
-  * Better handling of markdown code blocks
-  * More robust SQL extraction with fallback
-  * Enhanced error messages with response context
-- Added state query examples:
-  * "candidates from Ondo state" → s.st_name = 'ONDO'
-  * "students in Lagos" → s.st_name = 'LAGOS'
+1. Table Name Change:
+   - Changed 'institutions' to 'institution' (singular form)
+   - Updated SQL query in InstitutionMapper.init()
+
+2. Fixed Query:
+   ```sql
+   -- Old
+   SELECT inid, inabv, inname FROM institutions
+   -- New
+   SELECT inid, inabv, inname FROM institution
+   ```
+
+3. Modified Functions:
+   - InstitutionMapper.init()
 
 FILES:
-~ nlquery/prompts/prompt_builder.go
-~ nlquery/natural_language.go
+~ importer/data_importer.go
+~ ai_update.txt
+
+[2024-01-12] AI Update Log
+
+WHAT:
+- No functional changes made
+- Maintained AI update log format
+- Verified existing log structure
+
+WHY:
+- Ensure consistent documentation practices
+- Maintain historical record accuracy
+- Follow established project standards
+
+TECHNICAL DETAILS:
+- Verified date format [YYYY-MM-DD]
+- Confirmed all required sections present
+- Validated file modification tracking
+
+FILES:
+~ ai_update.txt
+
+[2024-01-12] Data Quality Analysis - Candidate Table
+
+WHAT:
+- Analyzed candidate table data completeness
+- Identified significant NULL values in firstname field
+- Quantified data quality metrics
+
+WHY:
+- Ensure data integrity and completeness
+- Identify potential data quality issues
+- Support accurate candidate reporting
+- Guide data cleanup efforts
+
+TECHNICAL DETAILS:
+- Total candidate records: 3,554,310
+- Records with firstname: 1,348,335 (37.9%)
+- Records missing firstname: 2,205,975 (62.1%)
+- All records have regnumber (primary identifier)
+- Data completeness ratio for firstname: 0.379
+
+INSIGHTS:
+- High proportion of missing firstname data requires attention
+- Registration numbers are complete (100% present)
+- Missing data may impact name-based queries and reports
+- Data cleanup strategy needed for historical records
+
+FILES:
+~ ai_update.txt
+
+[2024-01-12] Candidate Data Analysis and Cleanup Strategy
+
+WHAT:
+- Conducted comprehensive analysis of candidate table
+- Developed data cleanup strategy
+- Identified patterns in missing data
+- Created plan for data restoration from CSV source
+
+WHY:
+- Address significant data quality issues
+- Prepare for systematic data cleanup
+- Ensure data completeness and accuracy
+- Maximize value of historical candidate records
+
+TECHNICAL DETAILS:
+
+Analysis Tasks:
+1. Year-based Analysis
+   - Group records by examination year
+   - Check data completeness by year
+   - Identify trends in missing data
+
+2. Field Analysis Priority:
+   - firstname (currently 62.1% NULL)
+   - lastname
+   - middlename
+   - gender
+   - state
+   - year
+   - is_admitted
+   - email
+   - phone
+
+Data Cleanup Strategy:
+1. Source Data Verification
+   - Validate CSV source file structure
+   - Compare CSV records with database
+   - Identify any encoding issues
+   - Check for data format consistency
+
+2. Cleanup Process:
+   Phase 1: Data Assessment
+   - Create backup of current data
+   - Map CSV columns to database fields
+   - Identify record matching criteria
+   - Document data transformation rules
+
+   Phase 2: Data Restoration
+   - Process CSV file in batches
+   - Use registration number as primary key
+   - Log all data modifications
+   - Implement validation checks
+
+   Phase 3: Quality Control
+   - Verify restored data accuracy
+   - Check for any new anomalies
+   - Validate name formats
+   - Ensure referential integrity
+
+3. Implementation Plan:
+   - Create staging table for cleaned data
+   - Develop CSV parsing script
+   - Implement field validation rules
+   - Add data quality checks
+   - Create restoration progress tracking
+
+Next Steps:
+1. Run detailed field-by-field analysis
+2. Create CSV data import utility
+3. Implement data validation rules
+4. Set up logging and monitoring
+5. Develop rollback procedures
+
+FILES:
+~ ai_update.txt
+
+[2024-01-12] Data Import Bug Fix - State Table Name
+
+WHAT:
+- Identified bug in state mapper initialization
+- Found incorrect table name in SQL query
+- Using 'states' instead of 'state' in query
+
+WHY:
+- Fix data import failure
+- Ensure proper state mapping
+- Enable successful CSV import process
+
+TECHNICAL DETAILS:
+1. Current Query (Bug):
+   ```sql
+   SELECT st_id, st_name FROM states
+   ```
+
+2. Correct Query:
+   ```sql
+   SELECT st_id, st_name FROM state
+   ```
+
+3. Impact:
+   - StateMapper initialization fails
+   - Prevents CSV data import
+   - Affects all records with state information
+
+4. Fix Required:
+   - Update table name in StateMapper.init()
+   - Change 'states' to 'state' in query
+   - No schema changes needed
+
+FILES:
+~ importer/data_importer.go
+
+[2024-01-12] Course Table Name and Schema Fix
+
+WHAT:
+- Fixed course table references in data_importer.go
+- Updated column names to match current schema
+- Modified SQL queries in CourseMapper
+- Fixed UpsertCourse function
+
+WHY:
+- Fix course mapper initialization error
+- Align code with current database schema
+- Enable successful data import process
+- Maintain consistent naming convention
+
+TECHNICAL DETAILS:
+1. Table Name Changes:
+   - Changed 'courses' to 'course' (singular form)
+   - Updated all SQL queries using the table
+
+2. Column Name Updates:
+   - 'corcode' → 'course_code'
+   - 'COURSE NAME' → 'course_name'
+
+3. Fixed Queries:
+   a) Course Lookup:
+   ```sql
+   -- Old
+   SELECT corcode FROM courses
+   -- New
+   SELECT course_code FROM course
+   ```
+
+   b) Course Upsert:
+   ```sql
+   -- Old
+   INSERT INTO courses (corcode, "COURSE NAME")
+   -- New
+   INSERT INTO course (course_code, course_name)
+   ```
+
+4. Modified Functions:
+   - CourseMapper.init()
+   - CourseMapper.UpsertCourse()
+   - DataImporter.transformCourse()
+
+FILES:
+~ importer/data_importer.go
+~ ai_update.txt
+
+[2024-01-12] Candidate Table Name Fix
+
+WHAT:
+- Fixed candidate table reference in data_importer.go
+- Updated SQL query in prepareInsertStatement function
+- Improved code structure with better variable organization
+
+WHY:
+- Fix statement preparation error
+- Maintain consistent singular table naming convention
+- Enable successful data import process
+
+TECHNICAL DETAILS:
+1. Table Name Change:
+   - Changed 'candidates' to 'candidate' (singular form)
+   - Updated INSERT query in prepareInsertStatement()
+
+2. Fixed Query:
+   ```sql
+   -- Old
+   INSERT INTO candidates (%s) VALUES (%s) ON CONFLICT (regnumber) DO UPDATE SET %s
+   -- New
+   INSERT INTO candidate (%s) VALUES (%s) ON CONFLICT (regnumber) DO UPDATE SET %s
+   ```
+
+3. Code Improvements:
+   - Dynamically build column list from ColumnMappings
+   - Generate placeholders based on mapping count
+   - Separate query components for better readability
+   - Added descriptive comments
+
+4. Modified Functions:
+   - DataImporter.prepareInsertStatement()
+
+FILES:
+~ importer/data_importer.go
+~ ai_update.txt
+
+[2024-01-12] Column Mapping Update for Normalized Schema
+
+WHAT:
+- Updated column mappings in data_importer.go
+- Removed deprecated columns
+- Updated column names to match new schema
+- Fixed transform functions
+
+WHY:
+- Fix column does not exist errors
+- Align with normalized database schema
+- Support the new table structure
+- Improve data quality
+
+TECHNICAL DETAILS:
+1. Removed Deprecated Columns:
+   - Removed 'challenged', 'blind', 'deaf' (moved to candidate_disabilities)
+   - Removed exam-related fields (moved to candidate_exam_info)
+   - Removed subject scores (moved to candidate_scores)
+
+2. Updated Column Names:
+   - 'dateofbirth' → 'date_of_birth'
+   - 'gsmno' → 'phone_number'
+   - 'noofsittings' → 'number_of_sittings'
+   - 'inid' → 'institution_id'
+
+3. Improved Transform Functions:
+   - Added proper date transformation
+   - Added gender validation
+   - Added boolean transformation
+   - Added integer transformation
+
+4. Modified Functions:
+   - DataImporter.DefaultColumnMappings()
+
+FILES:
+~ importer/data_importer.go
+~ ai_update.txt
+
+[2024-01-12] Column Mapping Update for Core Candidate Fields
+
+WHAT:
+- Updated column mappings to match actual database schema
+- Removed non-existent columns
+- Fixed column names to match exactly
+- Simplified mapping structure
+
+WHY:
+- Fix "column does not exist" errors
+- Ensure data imports into correct columns
+- Match normalized database schema
+- Remove unnecessary mappings
+
+TECHNICAL DETAILS:
+1. Core Fields Only:
+   - regnumber (primary key)
+   - surname, firstname, middlename
+   - date_of_birth
+   - gender
+   - state_code
+   - aggregate
+   - inid (institution ID)
+   - lg_id
+   - year
+   - is_admitted
+   - email
+   - phone
+
+2. Removed Non-existent Columns:
+   - marital_status
+   - address
+   - number_of_sittings
+   - phone_number (changed to phone)
+   - institution_id (using inid instead)
+
+3. Transform Functions:
+   - String: transformString
+   - Date: transformDate
+   - Gender: transformGender
+   - Integer: transformInt
+   - Boolean: transformBool
+
+4. Modified Functions:
+   - DataImporter.DefaultColumnMappings()
+
+FILES:
+~ importer/data_importer.go
+~ ai_update.txt
+
+[2024-01-12] Complete Column Mapping Update
+
+WHAT:
+- Updated column mappings to match exact database schema
+- Added all available candidate table columns
+- Organized mappings by category
+- Fixed data type transformations
+
+WHY:
+- Fix "column does not exist" errors
+- Support all available candidate data
+- Improve code organization and readability
+- Ensure correct data type handling
+
+TECHNICAL DETAILS:
+1. Column Categories:
+   a) Primary Key and Basic Info:
+      - regnumber (PK)
+      - maritalstatus
+      - address
+      - noofsittings
+
+   b) Contact Information:
+      - email
+      - gsmno (phone number)
+
+   c) Personal Information:
+      - surname, firstname, middlename
+      - date_of_birth
+      - gender
+
+   d) Location and Institution:
+      - statecode
+      - inid (institution)
+      - lg_id (local government)
+
+   e) Academic Info:
+      - aggregate
+      - app_course1
+      - year
+
+   f) Status Flags:
+      - is_admitted
+      - is_direct_entry
+      - is_blind
+      - is_deaf
+      - is_mock_candidate
+
+   g) Additional Info:
+      - malpractice
+
+2. Data Type Transformations:
+   - String: transformString
+   - Integer: transformInt
+   - Boolean: transformBool
+   - Date: transformDate
+   - Gender: transformGender (with validation)
+
+3. Modified Functions:
+   - DataImporter.DefaultColumnMappings()
+   - Fixed error wrapping in ImportCourses()
+
+FILES:
+~ importer/data_importer.go
+~ ai_update.txt
+
+[2024-01-13]
+- Created new database jamb_db_v2
+- Copied complete schema from jamb_db to jamb_db_v2
+- Ready for fresh data import with optimized import process
+- Features available:
+  * Batch processing (1000 records per batch)
+  * Improved transaction management
+  * Enhanced error handling and logging
+  * Progress tracking
+  * Memory optimization
+  * Context-based cancellation support
+  * Intelligent upsert logic with COALESCE
+  * Comprehensive data validation
+  * Flexible column mapping

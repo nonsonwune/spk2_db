@@ -1,8 +1,60 @@
-Remember to maintain ai_update.txt with:
-- Date of changes [YYYY-MM-DD]
-- WHAT: Detailed list of changes made
-- WHY: Rationale behind changes
-- TECHNICAL DETAILS: Implementation specifics
-- Modified files (with ~)
+Project Context Management Instructions
 
-The file is located at: /Users/nonsonwune/Desktop/jamb_projects/spk2_db/ai_update.txt
+1. Initial Context Loading
+   - ALWAYS read ai_update.txt at /Users/nonsonwune/Desktop/jamb_projects/spk2_db/ai_update.txt at the start of each session
+   - Use this information to understand the current state of the project
+   - Note the most recent changes and active development areas
+
+2. Project Structure
+   Main Components:
+   - Data Importer (importer/data_importer.go)
+   - Database Schema (PostgreSQL)
+   - Analysis Tools (main.go)
+   - Configuration (.env)
+
+3. Key Features to Maintain:
+   - Batch Processing
+   - Transaction Management
+   - Error Handling
+   - Progress Tracking
+   - Data Validation
+   - Column Mapping
+
+4. Update Log Maintenance
+   When updating ai_update.txt, include:
+   - Date [YYYY-MM-DD]
+   - WHAT: Detailed list of changes made
+   - WHY: Rationale behind changes
+   - TECHNICAL DETAILS:
+     * Implementation specifics
+     * Performance considerations
+     * Error handling improvements
+     * Database optimizations
+   - Modified files (prefix with ~)
+   - Dependencies added/updated
+   - Schema changes
+   - New features or capabilities
+
+5. Database Information
+   - Main DB: postgresql://jamb_user:Jamb123@localhost:5432/jamb_db
+   - New DB: postgresql://jamb_user:Jamb123@localhost:5432/jamb_db_v2
+   - Schema: Includes tables for candidates, courses, institutions, etc.
+   - Key Operations: Import, Analysis, Reporting
+
+6. Code Standards
+   - Use Go best practices
+   - Maintain comprehensive error handling
+   - Include progress indicators for long operations
+   - Implement context-based cancellation
+   - Use batch processing for large datasets
+   - Preserve data integrity with COALESCE
+
+7. Project Goals
+   - Efficient data import
+   - Accurate analysis
+   - Robust error handling
+   - Performance optimization
+   - Data quality maintenance
+   - Comprehensive reporting
+
+Remember: This is a critical system for JAMB (Joint Admissions and Matriculation Board) data management. All changes must prioritize data integrity and system reliability.

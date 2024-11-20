@@ -1317,61 +1317,71 @@ func displayCourseCompetitiveness(ctx context.Context, db *sql.DB) error {
 }
 
 func handleCourseImport(ctx context.Context, db *sql.DB) error {
-    fmt.Print("Enter the course CSV file path: ")
+    fmt.Print("Enter the path to the courses CSV file: ")
     filename := readString()
 
-    // Verify file exists
-    if _, err := os.Stat(filename); os.IsNotExist(err) {
-        color.Red("File does not exist: %s", filename)
-        return fmt.Errorf("file not found: %s", err)
+    file, err := os.Open(filename)
+    if err != nil {
+        color.Red("Failed to open file: %v", err)
+        return err
     }
+    defer file.Close()
 
-    fmt.Print("\nReady to import course data from ", filename)
-    fmt.Print("\nThis will update existing course names if they are currently using code-based names.")
-    fmt.Print("\nProceed with import? (y/n): ")
+    reader := csv.NewReader(file)
 
-    if strings.ToLower(readString()) == "y" {
-        // Create a child context with timeout
-        importCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
-        defer cancel()
+    // Create a context with timeout
+    importCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+    defer cancel()
 
-        // Show progress indicator
-        go func() {
-            ticker := time.NewTicker(1 * time.Second)
-            defer ticker.Stop()
+    // Create a channel for progress updates
+    progressChan := make(chan struct{})
 
-            for {
-                select {
-                case <-importCtx.Done():
-                    return
-                case <-ticker.C:
-                    fmt.Print(".")
-                }
-            }
-        }()
+    // Start progress indicator
+    go func() {
+        ticker := time.NewTicker(time.Second)
+        defer ticker.Stop()
 
-        fmt.Print("\nImporting courses")
-        
-        if err := importer.ImportCourses(importCtx, db, filename); err != nil {
-            fmt.Println() // New line after progress dots
-            switch {
-            case err == context.DeadlineExceeded:
-                color.Red("Import timed out after 5 minutes")
-                return fmt.Errorf("import timed out: %w", err)
-            case err == context.Canceled:
-                color.Yellow("Import was cancelled")
-                return fmt.Errorf("import cancelled: %w", err)
-            default:
-                color.Red("Error importing courses: %v", err)
-                return fmt.Errorf("import error: %w", err)
+        for {
+            select {
+            case <-importCtx.Done():
+                return
+            case <-ticker.C:
+                fmt.Print(".")
+            case <-progressChan:
+                return
             }
         }
+    }()
 
-        fmt.Println() // New line after progress dots
-        color.Green("Course import completed successfully!")
-    } else {
-        fmt.Println("Import cancelled.")
+    // Ensure progress goroutine stops
+    defer func() {
+        close(progressChan)
+    }()
+
+    fmt.Print("\nImporting courses")
+    
+    config := importer.ImportConfig{
+        BatchSize: 1000,
+        WorkerCount: 4,
     }
+    
+    if err := importer.ImportCourses(importCtx, db, config, reader); err != nil {
+        fmt.Println() // New line after progress dots
+        switch {
+        case err == context.DeadlineExceeded:
+            color.Red("Import timed out after 5 minutes")
+            return fmt.Errorf("import timed out: %w", err)
+        case err == context.Canceled:
+            color.Yellow("Import was canceled")
+            return fmt.Errorf("import canceled: %w", err)
+        default:
+            color.Red("Import failed: %v", err)
+            return fmt.Errorf("import failed: %w", err)
+        }
+    }
+
+    fmt.Println() // New line after progress dots
+    color.Green("Successfully imported courses!")
     return nil
 }
 
